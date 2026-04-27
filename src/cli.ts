@@ -4,78 +4,80 @@ import chalk from "chalk";
 import process from "node:process";
 import os from "node:os";
 
-import { buildSystemBlocks } from "./systemPrompt.js";
-import { SHELL_TOOL_DEFINITION, runShell, type ShellInput } from "./tools/shell.js";
-import { READ_FILE_TOOL_DEFINITION, runReadFile, type ReadFileInput } from "./tools/readFile.js";
-import { LIST_DIR_TOOL_DEFINITION, runListDir, type ListDirInput } from "./tools/listDir.js";
-import { WRITE_FILE_TOOL_DEFINITION, runWriteFile, type WriteFileInput } from "./tools/writeFile.js";
-import { prompt, closeReadline } from "./confirm.js";
+import { buildSystemBlocks, appendMemoryBlock } from "./systemPrompt.js";
+import { closeReadline } from "./confirm.js";
+import { readUserInput } from "./input.js";
 import { parseArgs, HELP_TEXT, type Config } from "./config.js";
 import { accumulate, emptyTotals, formatSessionTotals, formatTurnUsage } from "./usage.js";
 import { createTranscriptWriter, type TranscriptWriter } from "./transcript.js";
+import { buildToolList, dispatchTool } from "./tools/registry.js";
+import { listJobs } from "./tools/backgroundShell.js";
+import { saveSession, loadSession, listSessions } from "./sessions.js";
+import { loadMemoryFiles, formatMemoryBlock, type MemoryFile } from "./memory.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
+const COMPACT_BETA = "compact-2026-01-12";
 
-const TOOLS: Anthropic.ToolUnion[] = [
-  SHELL_TOOL_DEFINITION,
-  READ_FILE_TOOL_DEFINITION,
-  LIST_DIR_TOOL_DEFINITION,
-  WRITE_FILE_TOOL_DEFINITION,
-];
-
-const BANNER = `${chalk.bold.cyan("arnie")} ${chalk.dim(`v${VERSION} — portable IT troubleshooting assistant`)}
-${chalk.dim("type")} ${chalk.white("/help")} ${chalk.dim("for commands,")} ${chalk.white("/exit")} ${chalk.dim("to quit")}
+const BANNER = `${chalk.bold.cyan("arnie")} ${chalk.dim(`v${VERSION} — IT troubleshooting companion`)}
+${chalk.dim("type")} ${chalk.white("/help")} ${chalk.dim("for commands,")} ${chalk.white(`"""`)} ${chalk.dim('for multi-line input,')} ${chalk.white("/exit")} ${chalk.dim("to quit")}
 `;
 
 const REPL_HELP = `${chalk.bold("Slash commands:")}
-  ${chalk.white("/help")}    show this help
-  ${chalk.white("/clear")}   reset the conversation
-  ${chalk.white("/usage")}   show session token totals and estimated cost
-  ${chalk.white("/tools")}   list available tools
-  ${chalk.white("/exit")}    quit (or Ctrl+C twice)
+  ${chalk.white("/help")}            this help
+  ${chalk.white("/usage")}           session token totals and estimated cost
+  ${chalk.white("/clear")}           reset the conversation
+  ${chalk.white("/tools")}           list registered tools
+  ${chalk.white("/jobs")}            list background shell jobs
+  ${chalk.white("/memory")}          show loaded memory files
+  ${chalk.white("/save <name>")}     save the current conversation
+  ${chalk.white("/load <name>")}     load a saved conversation
+  ${chalk.white("/list")}            list saved sessions
+  ${chalk.white("/exit")}            quit (or Ctrl+C twice)
+${chalk.bold("Input:")}
+  Type a message and press Enter. Use ${chalk.white(`"""`)} on its own line to start
+  and end multi-line mode (paste logs, stack traces, etc.).
 ${chalk.bold("Tools available to the model:")}
-  ${chalk.white("shell")}      run a shell command (destructive ops require confirmation)
-  ${chalk.white("read_file")}  read a file from disk
-  ${chalk.white("list_dir")}   list directory contents
-  ${chalk.white("write_file")} write a file (always requires confirmation)
+  ${chalk.white("shell, shell_background, shell_status, shell_kill")}
+  ${chalk.white("read_file, write_file, list_dir, grep")}
+  ${chalk.white("web_search")} (server-side)
 `;
-
-async function executeTool(name: string, input: unknown): Promise<string> {
-  if (name === "shell") return JSON.stringify(await runShell(input as ShellInput));
-  if (name === "read_file") return JSON.stringify(await runReadFile(input as ReadFileInput));
-  if (name === "list_dir") return JSON.stringify(await runListDir(input as ListDirInput));
-  if (name === "write_file") return JSON.stringify(await runWriteFile(input as WriteFileInput));
-  return JSON.stringify({ ok: false, error: `unknown tool: ${name}` });
-}
 
 interface TurnContext {
   client: Anthropic;
   config: Config;
   systemBlocks: Anthropic.TextBlockParam[];
+  tools: Anthropic.ToolUnion[];
   totals: ReturnType<typeof emptyTotals>;
   transcript: TranscriptWriter;
   abortController: { current: AbortController | null };
 }
 
-async function runTurn(
-  ctx: TurnContext,
-  messages: Anthropic.MessageParam[],
-): Promise<void> {
+async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Promise<void> {
   while (true) {
     process.stdout.write(chalk.dim("arnie: "));
 
     ctx.abortController.current = new AbortController();
-    const stream = ctx.client.messages.stream(
-      {
-        model: ctx.config.model,
-        max_tokens: ctx.config.maxTokens,
-        thinking: ctx.config.thinking === "adaptive" ? { type: "adaptive" } : { type: "disabled" },
-        output_config: { effort: ctx.config.effort },
-        system: ctx.systemBlocks,
-        messages,
-        tools: TOOLS,
-        cache_control: { type: "ephemeral" },
-      },
+
+    const requestParams: Anthropic.Beta.MessageCreateParamsStreaming = {
+      model: ctx.config.model,
+      max_tokens: ctx.config.maxTokens,
+      thinking: ctx.config.thinking === "adaptive" ? { type: "adaptive" } : { type: "disabled" },
+      output_config: { effort: ctx.config.effort },
+      system: ctx.systemBlocks,
+      messages: messages as Anthropic.Beta.BetaMessageParam[],
+      tools: ctx.tools as Anthropic.Beta.BetaToolUnion[],
+      cache_control: { type: "ephemeral" },
+      stream: true,
+    };
+
+    if (ctx.config.compact) {
+      requestParams.context_management = {
+        edits: [{ type: "compact_20260112" }],
+      };
+    }
+
+    const stream = ctx.client.beta.messages.stream(
+      ctx.config.compact ? { ...requestParams, betas: [COMPACT_BETA] } : requestParams,
       { signal: ctx.abortController.current.signal },
     );
 
@@ -83,7 +85,7 @@ async function runTurn(
       process.stdout.write(delta);
     });
 
-    let message: Anthropic.Message;
+    let message: Anthropic.Beta.BetaMessage;
     try {
       message = await stream.finalMessage();
     } catch (err) {
@@ -101,9 +103,9 @@ async function runTurn(
       console.log(formatTurnUsage(ctx.config.model, message.usage));
     }
     accumulate(ctx.totals, ctx.config.model, message.usage);
-    await ctx.transcript.appendAssistant(message);
+    await ctx.transcript.appendAssistant(message as unknown as Anthropic.Message);
 
-    messages.push({ role: "assistant", content: message.content });
+    messages.push({ role: "assistant", content: message.content as Anthropic.MessageParam["content"] });
 
     if (message.stop_reason === "end_turn" || message.stop_reason === "stop_sequence") return;
     if (message.stop_reason === "max_tokens") {
@@ -122,12 +124,12 @@ async function runTurn(
     }
 
     const toolUseBlocks = message.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
+      (b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use",
     );
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const tool of toolUseBlocks) {
-      const result = await executeTool(tool.name, tool.input);
+      const result = await dispatchTool(tool.name, tool.input);
       toolResults.push({
         type: "tool_result",
         tool_use_id: tool.id,
@@ -175,31 +177,114 @@ function handleApiError(err: unknown): string {
   return `error: ${String(err)}`;
 }
 
-function handleSlashCommand(
-  line: string,
-  messages: Anthropic.MessageParam[],
-  totals: ReturnType<typeof emptyTotals>,
-): "exit" | "continue" | null {
-  const cmd = line.trim().toLowerCase();
-  if (cmd === "/exit" || cmd === "/quit") return "exit";
-  if (cmd === "/help" || cmd === "/?") {
+interface SlashContext {
+  messages: Anthropic.MessageParam[];
+  totals: ReturnType<typeof emptyTotals>;
+  model: string;
+  tools: Anthropic.ToolUnion[];
+  memoryFiles: MemoryFile[];
+}
+
+async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exit" | "continue" | null> {
+  const trimmed = line.trim();
+  const [cmd, ...rest] = trimmed.split(/\s+/);
+  const arg = rest.join(" ").trim();
+  const lower = cmd.toLowerCase();
+
+  if (lower === "/exit" || lower === "/quit") return "exit";
+  if (lower === "/help" || lower === "/?") {
     console.log(REPL_HELP);
     return "continue";
   }
-  if (cmd === "/clear") {
-    messages.length = 0;
+  if (lower === "/clear") {
+    ctx.messages.length = 0;
     console.log(chalk.dim("conversation cleared"));
     return "continue";
   }
-  if (cmd === "/usage") {
-    console.log(formatSessionTotals(totals));
+  if (lower === "/usage") {
+    console.log(formatSessionTotals(ctx.totals));
     return "continue";
   }
-  if (cmd === "/tools") {
-    for (const t of TOOLS) {
+  if (lower === "/tools") {
+    for (const t of ctx.tools) {
       const name = "name" in t ? t.name : "(unknown)";
-      const desc = "description" in t && typeof t.description === "string" ? t.description : "";
-      console.log(`  ${chalk.white(name)} — ${desc.split("\n")[0]}`);
+      const desc =
+        "description" in t && typeof (t as { description?: unknown }).description === "string"
+          ? ((t as { description: string }).description.split("\n")[0] ?? "")
+          : "";
+      console.log(`  ${chalk.white(name)} — ${desc}`);
+    }
+    return "continue";
+  }
+  if (lower === "/jobs") {
+    const js = listJobs();
+    if (js.length === 0) {
+      console.log(chalk.dim("no background jobs"));
+    } else {
+      for (const j of js) {
+        console.log(`  ${chalk.white(j.id)} ${chalk.dim(`(${j.state}, ${j.elapsed_ms}ms, exit=${j.exit_code ?? "—"})`)} ${j.command}`);
+      }
+    }
+    return "continue";
+  }
+  if (lower === "/memory") {
+    if (ctx.memoryFiles.length === 0) {
+      console.log(chalk.dim("no memory files loaded (looked for .arnie/memory.md, ARNIE.md, ~/.arnie/memory.md)"));
+    } else {
+      for (const f of ctx.memoryFiles) {
+        console.log(chalk.bold(`--- ${f.scope}: ${f.path} ---`));
+        console.log(f.content.trim());
+        console.log();
+      }
+    }
+    return "continue";
+  }
+  if (lower === "/save") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /save <name>"));
+      return "continue";
+    }
+    if (ctx.messages.length === 0) {
+      console.log(chalk.yellow("nothing to save (conversation is empty)"));
+      return "continue";
+    }
+    try {
+      const file = await saveSession(arg, ctx.model, ctx.messages);
+      console.log(chalk.dim(`saved ${ctx.messages.length} messages → ${file}`));
+    } catch (err) {
+      console.error(chalk.red(`save failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
+  if (lower === "/load") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /load <name>"));
+      return "continue";
+    }
+    try {
+      const session = await loadSession(arg);
+      if (!session) {
+        console.log(chalk.yellow(`no saved session named "${arg}"`));
+        return "continue";
+      }
+      ctx.messages.length = 0;
+      ctx.messages.push(...session.messages);
+      console.log(
+        chalk.dim(`loaded ${session.messages.length} messages from ${session.name} (saved ${session.saved_at}, model ${session.model})`),
+      );
+    } catch (err) {
+      console.error(chalk.red(`load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
+  if (lower === "/list") {
+    const ss = await listSessions();
+    if (ss.length === 0) {
+      console.log(chalk.dim("no saved sessions"));
+    } else {
+      for (const s of ss) {
+        console.log(`  ${chalk.white(s.name)}  ${chalk.dim(`${s.saved_at}  turns=${s.turns}  ${s.bytes}b  ${s.model}`)}`);
+      }
     }
     return "continue";
   }
@@ -233,8 +318,31 @@ async function main(): Promise<void> {
   }
 
   const client = new Anthropic({ maxRetries: 3 });
-  const systemBlocks = buildSystemBlocks(config.systemExtra);
+  let systemBlocks = buildSystemBlocks(config.systemExtra);
+
+  const memoryFiles = config.noMemory ? [] : await loadMemoryFiles();
+  if (memoryFiles.length > 0) {
+    systemBlocks = appendMemoryBlock(systemBlocks, formatMemoryBlock(memoryFiles));
+  }
+
+  const tools = buildToolList({ webSearch: !config.noWebSearch });
+
   const messages: Anthropic.MessageParam[] = [];
+  if (config.resume) {
+    try {
+      const session = await loadSession(config.resume);
+      if (!session) {
+        console.error(chalk.red(`no saved session named "${config.resume}"`));
+        process.exit(1);
+      }
+      messages.push(...session.messages);
+      console.log(chalk.dim(`resumed ${session.messages.length} messages from ${session.name}`));
+    } catch (err) {
+      console.error(chalk.red(`failed to resume: ${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+  }
+
   const totals = emptyTotals();
 
   const transcript = createTranscriptWriter({
@@ -252,9 +360,12 @@ async function main(): Promise<void> {
   process.stdout.write(BANNER);
   console.log(
     chalk.dim(
-      `model=${config.model} effort=${config.effort} thinking=${config.thinking} max_tokens=${config.maxTokens}`,
+      `model=${config.model} effort=${config.effort} thinking=${config.thinking} compact=${config.compact} max_tokens=${config.maxTokens}`,
     ),
   );
+  if (memoryFiles.length > 0) {
+    console.log(chalk.dim(`memory: ${memoryFiles.map((f) => f.path).join(", ")}`));
+  }
   if (transcript.enabled && transcript.path) {
     console.log(chalk.dim(`transcript: ${transcript.path}`));
   }
@@ -265,9 +376,17 @@ async function main(): Promise<void> {
     client,
     config,
     systemBlocks,
+    tools,
     totals,
     transcript,
     abortController,
+  };
+  const slashCtx: SlashContext = {
+    messages,
+    totals,
+    model: config.model,
+    tools,
+    memoryFiles,
   };
 
   let sigintCount = 0;
@@ -289,18 +408,15 @@ async function main(): Promise<void> {
 
   while (true) {
     sigintCount = 0;
-    let line: string;
-    try {
-      line = await prompt(chalk.bold.green("you> "));
-    } catch {
-      break;
-    }
-
+    const line = await readUserInput();
+    if (line === null) break;
     if (!line.trim()) continue;
 
-    const slash = handleSlashCommand(line, messages, totals);
-    if (slash === "exit") break;
-    if (slash === "continue") continue;
+    if (line.trim().startsWith("/")) {
+      const slash = await handleSlashCommand(line, slashCtx);
+      if (slash === "exit") break;
+      if (slash === "continue") continue;
+    }
 
     await transcript.appendUser(line);
     messages.push({ role: "user", content: line });

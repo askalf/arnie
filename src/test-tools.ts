@@ -4,9 +4,14 @@ import path from "node:path";
 import { runReadFile } from "./tools/readFile.js";
 import { runShell } from "./tools/shell.js";
 import { runListDir } from "./tools/listDir.js";
+import { runGrep } from "./tools/grep.js";
+import { runShellBackground, runShellStatus, runShellKill, listJobs } from "./tools/backgroundShell.js";
+import { dispatchTool, buildToolList } from "./tools/registry.js";
 import { parseArgs } from "./config.js";
 import { accumulate, emptyTotals, turnCost } from "./usage.js";
 import { createTranscriptWriter } from "./transcript.js";
+import { saveSession, loadSession, listSessions } from "./sessions.js";
+import { loadMemoryFiles, formatMemoryBlock } from "./memory.js";
 
 interface Case {
   name: string;
@@ -155,8 +160,16 @@ function configTests(): void {
   const c1 = parseArgs([]);
   cases.push({
     name: "config: defaults",
-    pass: c1.model === "claude-opus-4-7" && c1.effort === "high" && c1.maxTokens === 16000 && c1.thinking === "adaptive" && c1.transcript,
-    detail: `model=${c1.model}, effort=${c1.effort}, max_tokens=${c1.maxTokens}, thinking=${c1.thinking}, transcript=${c1.transcript}`,
+    pass:
+      c1.model === "claude-opus-4-7" &&
+      c1.effort === "xhigh" &&
+      c1.maxTokens === 64000 &&
+      c1.thinking === "adaptive" &&
+      c1.transcript &&
+      c1.compact &&
+      !c1.noWebSearch &&
+      !c1.noMemory,
+    detail: `model=${c1.model}, effort=${c1.effort}, max_tokens=${c1.maxTokens}, thinking=${c1.thinking}, transcript=${c1.transcript}, compact=${c1.compact}, noWebSearch=${c1.noWebSearch}, noMemory=${c1.noMemory}`,
   });
 
   const c2 = parseArgs(["--model", "claude-haiku-4-5", "--effort", "low", "--max-tokens", "1024"]);
@@ -205,6 +218,8 @@ function usageTests(): void {
     output_tokens: 500,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
+    cache_creation: null,
+    inference_geo: null,
     server_tool_use: null,
     service_tier: null,
   });
@@ -221,6 +236,8 @@ function usageTests(): void {
     output_tokens: 1000,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
+    cache_creation: null,
+    inference_geo: null,
     server_tool_use: null,
     service_tier: null,
   });
@@ -236,6 +253,8 @@ function usageTests(): void {
     output_tokens: 1000,
     cache_creation_input_tokens: 0,
     cache_read_input_tokens: 0,
+    cache_creation: null,
+    inference_geo: null,
     server_tool_use: null,
     service_tier: null,
   });
@@ -274,6 +293,229 @@ async function transcriptTests(): Promise<void> {
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
+async function grepTests(): Promise<void> {
+  const tmp = path.join(os.tmpdir(), `arnie-grep-${Date.now()}`);
+  await fs.mkdir(tmp, { recursive: true });
+  await fs.writeFile(path.join(tmp, "a.log"), "INFO start\nERROR boom\nWARN slow\nERROR retry\n", "utf8");
+  await fs.writeFile(path.join(tmp, "b.txt"), "nothing useful here\n", "utf8");
+  await fs.mkdir(path.join(tmp, "node_modules"), { recursive: true });
+  await fs.writeFile(path.join(tmp, "node_modules", "skipped.log"), "ERROR should be skipped\n", "utf8");
+
+  const r1 = await runGrep({ pattern: "ERROR", path: tmp });
+  cases.push({
+    name: "grep: finds matches",
+    pass: r1.ok && r1.matches.length === 2 && r1.matches.every((m) => m.text.includes("ERROR")) && !r1.matches.some((m) => m.file.includes("node_modules")),
+    detail: r1.ok ? `${r1.matches.length} matches, files=${r1.files_scanned}` : `error: ${r1.error}`,
+  });
+
+  const r2 = await runGrep({ pattern: "error", path: tmp, case_insensitive: true });
+  cases.push({
+    name: "grep: case-insensitive",
+    pass: r2.ok && r2.matches.length === 2,
+    detail: `${r2.matches.length} matches`,
+  });
+
+  const r3 = await runGrep({ pattern: "ERROR", path: tmp, glob: "*.log" });
+  cases.push({
+    name: "grep: glob filter",
+    pass: r3.ok && r3.matches.every((m) => m.file.endsWith(".log")),
+    detail: `${r3.matches.length} matches in ${r3.files_scanned} files`,
+  });
+
+  const r4 = await runGrep({ pattern: "INVALID[", path: tmp });
+  cases.push({
+    name: "grep: invalid regex returns error",
+    pass: !r4.ok && r4.error !== undefined && r4.error.includes("invalid regex"),
+    detail: r4.error ?? "expected error",
+  });
+
+  const r5 = await runGrep({ pattern: "INVALID[", path: tmp, literal: true });
+  cases.push({
+    name: "grep: literal mode escapes regex",
+    pass: r5.ok,
+    detail: r5.ok ? `ran ok, ${r5.matches.length} matches` : `error: ${r5.error}`,
+  });
+
+  await fs.rm(tmp, { recursive: true, force: true });
+}
+
+async function backgroundJobTests(): Promise<void> {
+  const isWindows = process.platform === "win32";
+  const fastCmd = isWindows ? "Write-Output 'bg-fast-done'" : "echo 'bg-fast-done'";
+  const slowCmd = isWindows ? "Start-Sleep -Milliseconds 1500; Write-Output 'bg-slow-done'" : "sleep 1.5 && echo 'bg-slow-done'";
+
+  const fast = await runShellBackground({ command: fastCmd, reason: "test fast bg" });
+  cases.push({
+    name: "shell_background: returns job id",
+    pass: fast.ok && !!fast.job_id,
+    detail: fast.ok ? `id=${fast.job_id}` : `error: ${fast.error}`,
+  });
+
+  await new Promise((r) => setTimeout(r, 500));
+  const fastStatus = await runShellStatus({ job_id: fast.job_id! });
+  cases.push({
+    name: "shell_status: fast job exits",
+    pass: fastStatus.ok && fastStatus.state === "exited" && fastStatus.exit_code === 0 && fastStatus.stdout.includes("bg-fast-done"),
+    detail: `state=${fastStatus.state} exit=${fastStatus.exit_code}`,
+  });
+
+  const slow = await runShellBackground({ command: slowCmd, reason: "test slow bg" });
+  await new Promise((r) => setTimeout(r, 100));
+  const midStatus = await runShellStatus({ job_id: slow.job_id! });
+  cases.push({
+    name: "shell_status: running while in-flight",
+    pass: midStatus.ok && midStatus.state === "running",
+    detail: `state=${midStatus.state}`,
+  });
+
+  await new Promise((r) => setTimeout(r, 2000));
+  const finalStatus = await runShellStatus({ job_id: slow.job_id! });
+  cases.push({
+    name: "shell_status: slow job finishes",
+    pass: finalStatus.ok && finalStatus.state === "exited" && finalStatus.stdout.includes("bg-slow-done"),
+    detail: `state=${finalStatus.state} stdout='${finalStatus.stdout.trim()}'`,
+  });
+
+  const unknown = await runShellStatus({ job_id: "nope" });
+  cases.push({
+    name: "shell_status: unknown id returns error",
+    pass: !unknown.ok && unknown.error !== undefined,
+    detail: unknown.error ?? "expected error",
+  });
+
+  const killable = await runShellBackground({ command: isWindows ? "Start-Sleep 30" : "sleep 30", reason: "test kill" });
+  await new Promise((r) => setTimeout(r, 100));
+  const kr = await runShellKill({ job_id: killable.job_id! });
+  cases.push({
+    name: "shell_kill: kills running job",
+    pass: kr.ok && kr.killed,
+    detail: `killed=${kr.killed}`,
+  });
+
+  await new Promise((r) => setTimeout(r, 200));
+  const afterKill = await runShellStatus({ job_id: killable.job_id! });
+  cases.push({
+    name: "shell_kill: state reflects kill",
+    pass: afterKill.ok && (afterKill.state === "killed" || afterKill.state === "exited"),
+    detail: `state=${afterKill.state}`,
+  });
+
+  cases.push({
+    name: "list_jobs: returns active and finished",
+    pass: listJobs().length >= 3,
+    detail: `${listJobs().length} jobs total`,
+  });
+}
+
+async function sessionTests(): Promise<void> {
+  const name = `arnie-test-${Date.now()}`;
+  const messages = [
+    { role: "user" as const, content: "what is 2+2" },
+    { role: "assistant" as const, content: "4" },
+  ];
+  const file = await saveSession(name, "claude-opus-4-7", messages);
+  cases.push({
+    name: "sessions: save returns path",
+    pass: typeof file === "string" && file.includes(name),
+    detail: file,
+  });
+
+  const loaded = await loadSession(name);
+  cases.push({
+    name: "sessions: load returns saved data",
+    pass: !!loaded && loaded.messages.length === 2 && loaded.model === "claude-opus-4-7",
+    detail: loaded ? `loaded ${loaded.messages.length} messages` : "null",
+  });
+
+  const all = await listSessions();
+  cases.push({
+    name: "sessions: list includes saved",
+    pass: all.some((s) => s.name === name),
+    detail: `total=${all.length}`,
+  });
+
+  const missing = await loadSession("nonexistent-session-xyz");
+  cases.push({
+    name: "sessions: missing load returns null",
+    pass: missing === null,
+    detail: missing === null ? "null" : "got data",
+  });
+
+  const sessionDir = path.join(os.homedir(), ".arnie", "sessions");
+  await fs.unlink(path.join(sessionDir, `${name.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`)).catch(() => {});
+}
+
+async function memoryTests(): Promise<void> {
+  const projectMemoryDir = path.join(process.cwd(), ".arnie");
+  const projectMemoryFile = path.join(projectMemoryDir, "memory.md");
+  await fs.mkdir(projectMemoryDir, { recursive: true });
+  await fs.writeFile(projectMemoryFile, "# Project notes\nThis machine runs the AD lab; DC is at 10.0.0.5.\n", "utf8");
+
+  const files = await loadMemoryFiles();
+  cases.push({
+    name: "memory: loads project memory.md",
+    pass: files.some((f) => f.scope === "project" && f.content.includes("AD lab")),
+    detail: `loaded ${files.length} files`,
+  });
+
+  const block = formatMemoryBlock(files);
+  cases.push({
+    name: "memory: formatMemoryBlock produces non-empty",
+    pass: block.length > 0 && block.includes("AD lab"),
+    detail: `${block.length} chars`,
+  });
+
+  const empty = formatMemoryBlock([]);
+  cases.push({
+    name: "memory: empty returns empty string",
+    pass: empty === "",
+    detail: `len=${empty.length}`,
+  });
+
+  await fs.unlink(projectMemoryFile).catch(() => {});
+  await fs.rmdir(projectMemoryDir).catch(() => {});
+}
+
+async function dispatchTests(): Promise<void> {
+  const r1 = await dispatchTool("read_file", { path: "package.json" });
+  const parsed1 = JSON.parse(r1);
+  cases.push({
+    name: "dispatch: routes to read_file",
+    pass: parsed1.ok === true,
+    detail: `ok=${parsed1.ok}`,
+  });
+
+  const r2 = await dispatchTool("read_file", { /* missing path */ });
+  const parsed2 = JSON.parse(r2);
+  cases.push({
+    name: "dispatch: zod rejects bad input",
+    pass: parsed2.ok === false && typeof parsed2.error === "string" && parsed2.error.includes("invalid input"),
+    detail: parsed2.error,
+  });
+
+  const r3 = await dispatchTool("nonexistent_tool", {});
+  const parsed3 = JSON.parse(r3);
+  cases.push({
+    name: "dispatch: unknown tool returns error",
+    pass: parsed3.ok === false && parsed3.error.includes("unknown tool"),
+    detail: parsed3.error,
+  });
+
+  const tools = buildToolList({ webSearch: true });
+  cases.push({
+    name: "dispatch: web_search included when enabled",
+    pass: tools.some((t) => "name" in t && t.name === "web_search"),
+    detail: `${tools.length} tools`,
+  });
+
+  const noWeb = buildToolList({ webSearch: false });
+  cases.push({
+    name: "dispatch: web_search excluded when disabled",
+    pass: !noWeb.some((t) => "name" in t && t.name === "web_search"),
+    detail: `${noWeb.length} tools`,
+  });
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -281,6 +523,11 @@ async function main(): Promise<void> {
   configTests();
   usageTests();
   await transcriptTests();
+  await grepTests();
+  await backgroundJobTests();
+  await sessionTests();
+  await memoryTests();
+  await dispatchTests();
 
   console.log();
   console.log("=".repeat(70));

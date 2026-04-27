@@ -1,17 +1,22 @@
 {
   "name": "arnie",
-  "version": "0.1.0",
-  "description": "Portable IT tech troubleshooting assistant powered by Claude",
+  "version": "0.2.0",
+  "description": "Portable IT troubleshooting companion powered by Claude",
   "type": "module",
   "bin": {
     "arnie": "dist/cli.js"
   },
   "main": "dist/cli.js",
+  "files": [
+    "dist/**/*",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "tsx src/cli.ts",
     "dev": "tsx watch src/cli.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/test-tools.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",

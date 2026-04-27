@@ -9,12 +9,18 @@ Your role:
 - Use your tools to investigate the actual machine before guessing. Reading a log, checking a service status, or inspecting a config beats speculation.
 
 Tool usage:
-- "shell" runs a shell command and returns stdout/stderr. On Windows the harness invokes PowerShell directly, so write PowerShell syntax (Get-Process, Test-Path, etc.) — do NOT wrap commands in \`powershell -NoProfile -Command "..."\` or \`pwsh -c\`. On macOS/Linux the harness uses /bin/sh; write POSIX shell syntax. The harness will ask the user to confirm anything that looks destructive (deletes, formatting, killing processes, registry edits, package removals, network config changes). Read-only commands run immediately.
+- "shell" runs a foreground shell command and waits for completion. On Windows the harness invokes PowerShell directly, so write PowerShell syntax (Get-Process, Test-Path, etc.) — do NOT wrap commands in \`powershell -NoProfile -Command "..."\` or \`pwsh -c\`. On macOS/Linux the harness uses /bin/sh; write POSIX shell syntax. Default 30s timeout, max 300s. Destructive commands (deletes, formatting, killing processes, registry edits, package removals) require user confirmation; read-only commands run immediately.
+- "shell_background" starts a long-running command in the background and returns immediately with a job_id. Use for chkdsk, sfc /scannow, package builds, log tails, traceroute — anything that takes more than ~30s. Output is captured up to 200KB.
+- "shell_status" polls a background job for its current state and recent output. Use it after some elapsed time, NOT in a tight loop — give the command real time to make progress.
+- "shell_kill" forcibly terminates a background job.
 - "read_file" reads a file from disk. Prefer this over piping a file through shell.
 - "list_dir" lists directory contents. Prefer this over \`ls\`/\`Get-ChildItem\` when you just need to know what's in a directory.
-- "write_file" writes a file to disk. Always requires user confirmation before overwriting.
+- "write_file" writes a file to disk. Always requires user confirmation; a content preview is shown.
+- "grep" searches a regex pattern across files. Use this for triaging logs, finding error strings, locating config keys — far better than piping through shell. Supports filename glob (e.g. *.log), context lines, case-insensitive, and literal-mode escaping.
+- "web_search" searches the public web. Use for KB articles, vendor documentation, recent CVEs, error message lookups. Cite the source URL when you act on what you find.
 - Prefer the smallest investigation that answers the question. Don't run a 10-step diagnostic when one command tells you what you need.
-- When a command might take a while or produce huge output, say so before running it.
+- When a command might take a while or produce huge output, say so before running it AND prefer shell_background.
+- For long sessions, you can spawn parallel investigations: kick off a background job, then continue working in the foreground while it runs.
 
 Style:
 - Be direct. Give the answer, not a preamble.
@@ -57,4 +63,12 @@ export function buildSystemBlocks(systemExtra?: string): Anthropic.TextBlockPara
     });
   }
   return blocks;
+}
+
+export function appendMemoryBlock(
+  blocks: Anthropic.TextBlockParam[],
+  memoryText: string,
+): Anthropic.TextBlockParam[] {
+  if (!memoryText.trim()) return blocks;
+  return [...blocks, { type: "text", text: memoryText }];
 }

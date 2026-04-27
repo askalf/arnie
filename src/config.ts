@@ -9,17 +9,24 @@ export interface Config {
   systemExtra?: string;
   showHelp: boolean;
   showVersion: boolean;
+  compact: boolean;
+  resume?: string;
+  noWebSearch: boolean;
+  noMemory: boolean;
 }
 
 const DEFAULTS: Config = {
   model: "claude-opus-4-7",
-  effort: "high",
-  maxTokens: 16000,
+  effort: "xhigh",
+  maxTokens: 64000,
   thinking: "adaptive",
   transcript: true,
   showUsage: true,
   showHelp: false,
   showVersion: false,
+  compact: true,
+  noWebSearch: false,
+  noMemory: false,
 };
 
 const VALID_EFFORTS: Config["effort"][] = ["low", "medium", "high", "xhigh", "max"];
@@ -75,6 +82,18 @@ export function parseArgs(argv: string[]): Config {
       case "--system-extra":
         config.systemExtra = next("--system-extra");
         break;
+      case "--no-compact":
+        config.compact = false;
+        break;
+      case "--resume":
+        config.resume = next("--resume");
+        break;
+      case "--no-web-search":
+        config.noWebSearch = true;
+        break;
+      case "--no-memory":
+        config.noMemory = true;
+        break;
       default:
         throw new Error(`unknown option: ${arg}`);
     }
@@ -86,21 +105,34 @@ export const HELP_TEXT = `Usage: arnie [options]
 
 Options:
   --model <id>            Claude model ID (default: claude-opus-4-7)
-  --effort <level>        Effort: low|medium|high|xhigh|max (default: high)
-  --max-tokens <n>        Max output tokens per turn (default: 16000)
+  --effort <level>        Effort: low|medium|high|xhigh|max (default: xhigh)
+  --max-tokens <n>        Max output tokens per turn (default: 64000)
   --no-thinking           Disable adaptive thinking
+  --no-compact            Disable server-side context compaction
+  --no-web-search         Disable web search tool
+  --no-memory             Don't load .arnie/memory.md
   --no-transcript         Don't write a session transcript
   --transcript-dir <dir>  Directory for transcripts (default: ~/.arnie/transcripts)
   --no-usage              Don't display per-turn usage
   --system-extra <text>   Append text to the system prompt (machine-specific instructions)
+  --resume <name>         Resume a saved session by name
   --version               Print version and exit
   -h, --help              Show this help and exit
+
+Input:
+  Type a message and press Enter. Triple-quote (""") on its own line
+  starts and ends multi-line mode for pasting logs and stack traces.
 
 Slash commands inside the REPL:
   /help                   Show REPL help
   /usage                  Show session token totals and cost estimate
   /clear                  Reset the conversation
   /tools                  List available tools
+  /save <name>            Save the current conversation
+  /load <name>            Load a saved conversation (replaces current)
+  /list                   List saved sessions
+  /memory                 Show the contents of memory files in use
+  /jobs                   List running background shell jobs
   /exit                   Quit
 
 Environment:
