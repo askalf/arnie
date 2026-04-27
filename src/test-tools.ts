@@ -20,6 +20,7 @@ import { initWorkspace } from "./init.js";
 import { renderStatusLine } from "./statusLine.js";
 import { createMarkdownRenderer } from "./markdown.js";
 import { exportConversation } from "./export.js";
+import { recordToolCall, resetToolStats, formatToolStats } from "./toolStats.js";
 
 interface Case {
   name: string;
@@ -802,7 +803,7 @@ function statusLineTests(): void {
 function markdownTests(): void {
   const captured: string[] = [];
   const origWrite = process.stdout.write.bind(process.stdout);
-  // @ts-expect-error reassign
+  // @ts-ignore reassign
   process.stdout.write = (chunk: string | Uint8Array): boolean => {
     captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
     return true;
@@ -815,7 +816,7 @@ function markdownTests(): void {
     r.push("```js\nconsole.log('hi');\n```\n");
     r.flush();
   } finally {
-    // @ts-expect-error restore
+    // @ts-ignore restore
     process.stdout.write = origWrite;
   }
   const out = captured.join("");
@@ -849,6 +850,170 @@ async function autoResumeTests(): Promise<void> {
   await fs.unlink(path.join(sessionDir, "auto-resume-2.json")).catch(() => {});
 }
 
+async function findSessionsTests(): Promise<void> {
+  const { searchSessions } = await import("./sessions.js");
+  await saveSession("find-test-1", "claude-opus-4-7", [
+    { role: "user", content: "the printer queue is jammed" },
+    { role: "assistant", content: [{ type: "text", text: "let me check the spooler" }] },
+  ]);
+  await saveSession("find-test-2", "claude-opus-4-7", [
+    { role: "user", content: "DNS lookup failing for internal hosts" },
+  ]);
+
+  const hits1 = await searchSessions("printer");
+  cases.push({
+    name: "/find: matches user message",
+    pass: hits1.some((h) => h.session === "find-test-1" && h.snippet.toLowerCase().includes("printer")),
+    detail: `${hits1.length} hits`,
+  });
+
+  const hits2 = await searchSessions("spooler");
+  cases.push({
+    name: "/find: matches assistant text block",
+    pass: hits2.some((h) => h.role === "assistant"),
+    detail: `${hits2.length} hits`,
+  });
+
+  const hits3 = await searchSessions("nonexistent_query_xyz");
+  cases.push({
+    name: "/find: empty result on no match",
+    pass: hits3.length === 0,
+    detail: "ok",
+  });
+
+  const dir = path.join(os.homedir(), ".arnie", "sessions");
+  await fs.unlink(path.join(dir, "find-test-1.json")).catch(() => {});
+  await fs.unlink(path.join(dir, "find-test-2.json")).catch(() => {});
+}
+
+async function mcpTests(): Promise<void> {
+  const { loadMcpConfig } = await import("./mcp.js");
+  const cfg = await loadMcpConfig();
+  cases.push({
+    name: "mcp: returns empty when no config",
+    pass: cfg.servers.length === 0 && cfg.source === null,
+    detail: `servers=${cfg.servers.length}, source=${cfg.source}`,
+  });
+
+  const tmpRoot = path.join(process.cwd(), ".arnie");
+  await fs.mkdir(tmpRoot, { recursive: true });
+  const tmpFile = path.join(tmpRoot, "mcp.json");
+  await fs.writeFile(
+    tmpFile,
+    JSON.stringify({
+      servers: [
+        { name: "test", url: "https://example.com/mcp" },
+        { type: "url", name: "auth-test", url: "https://auth.example.com", authorization_token: "tok" },
+      ],
+    }),
+    "utf8",
+  );
+
+  const cfg2 = await loadMcpConfig();
+  cases.push({
+    name: "mcp: loads servers from .arnie/mcp.json",
+    pass: cfg2.servers.length === 2 && cfg2.servers[0].name === "test" && cfg2.servers[1].authorization_token === "tok",
+    detail: `${cfg2.servers.length} servers`,
+  });
+
+  await fs.unlink(tmpFile).catch(() => {});
+  // Don't remove .arnie because other tests may share it
+}
+
+async function attachTests(): Promise<void> {
+  const { parseInput } = await import("./attach.js");
+
+  // Plain text — no attachments
+  const r1 = await parseInput("just a normal message");
+  cases.push({
+    name: "attach: plain text passes through",
+    pass: r1.attachments.length === 0 && r1.blocks.length === 1 && r1.blocks[0].type === "text",
+    detail: "ok",
+  });
+
+  // attach a text file
+  const tmpDir = path.join(os.tmpdir(), `arnie-attach-${Date.now()}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const txt = path.join(tmpDir, "note.txt");
+  await fs.writeFile(txt, "hello attached file", "utf8");
+  const r2 = await parseInput(`look at this:\nattach ${txt}`);
+  cases.push({
+    name: "attach: text file becomes a content block",
+    pass:
+      r2.attachments.length === 1 &&
+      r2.attachments[0].type === "text" &&
+      r2.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("hello attached file")),
+    detail: `${r2.attachments.length} attached`,
+  });
+
+  // attach a tiny PNG
+  const png = path.join(tmpDir, "tiny.png");
+  await fs.writeFile(
+    png,
+    Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49,
+      0x44, 0x41, 0x54, 0x78, 0x9c, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00,
+      0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]),
+  );
+  const r3 = await parseInput(`describe this:\nattach ${png}`);
+  cases.push({
+    name: "attach: image file becomes image block",
+    pass:
+      r3.attachments.length === 1 &&
+      r3.attachments[0].type === "image" &&
+      r3.blocks.some((b) => b.type === "image"),
+    detail: `${r3.attachments.length} attached`,
+  });
+
+  const r4 = await parseInput(`attach /this/path/does/not/exist.png`);
+  cases.push({
+    name: "attach: missing file produces error",
+    pass: r4.errors.length === 1,
+    detail: r4.errors[0] ?? "no error",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
+function toolStatsTests(): void {
+  resetToolStats();
+  recordToolCall("read_file", 12, true);
+  recordToolCall("read_file", 8, true);
+  recordToolCall("shell", 50, false);
+  const out = formatToolStats();
+  cases.push({
+    name: "toolStats: formats counts and durations",
+    pass: out.includes("read_file") && out.includes("calls=  2") && out.includes("shell") && out.includes("errors=1"),
+    detail: "ok",
+  });
+  resetToolStats();
+}
+
+async function quietLogTests(): Promise<void> {
+  const { setQuiet, log: logFn } = await import("./log.js");
+  const orig = console.log;
+  let captured = 0;
+  console.log = () => {
+    captured += 1;
+  };
+  try {
+    setQuiet(true);
+    logFn("invisible");
+    logFn("also invisible");
+    setQuiet(false);
+    logFn("visible");
+  } finally {
+    console.log = orig;
+  }
+  cases.push({
+    name: "quiet: log() suppresses when quiet=true",
+    pass: captured === 1,
+    detail: `captured=${captured} (expected 1)`,
+  });
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -871,6 +1036,11 @@ async function main(): Promise<void> {
   statusLineTests();
   markdownTests();
   await autoResumeTests();
+  await findSessionsTests();
+  await mcpTests();
+  await attachTests();
+  toolStatsTests();
+  await quietLogTests();
 
   console.log();
   console.log("=".repeat(70));

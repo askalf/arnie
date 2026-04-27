@@ -3,6 +3,7 @@ import process from "node:process";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
 import { evaluateCommand, type PermissionsConfig } from "../permissions.js";
+import { log } from "../log.js";
 
 let permissions: PermissionsConfig = { allow: [], deny: [], source: null };
 
@@ -84,13 +85,13 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
   const command = input.command;
   const timeoutMs = (input.timeout_seconds ?? DEFAULT_TIMEOUT_MS / 1000) * 1000;
 
-  console.log();
-  console.log(chalk.cyan("$ ") + chalk.white(command));
-  if (input.reason) console.log(chalk.dim(`  reason: ${input.reason}`));
+  log();
+  log(chalk.cyan("$ ") + chalk.white(command));
+  if (input.reason) log(chalk.dim(`  reason: ${input.reason}`));
 
   const decision = evaluateCommand(command, permissions);
   if (decision.decision === "deny") {
-    console.log(chalk.red(`  ✕ denied by permissions config: ${decision.reason ?? decision.rule}`));
+    log(chalk.red(`  ✕ denied by permissions config: ${decision.reason ?? decision.rule}`));
     return {
       ok: false,
       exit_code: null,
@@ -103,10 +104,10 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
 
   const danger = looksDestructive(command);
   if (danger && decision.decision !== "allow") {
-    console.log(chalk.red(`  ⚠ flagged as potentially destructive: ${danger}`));
+    log(chalk.red(`  ⚠ flagged as potentially destructive: ${danger}`));
     const ok = await confirm("  Run this command?");
     if (!ok) {
-      console.log(chalk.dim("  skipped by user"));
+      log(chalk.dim("  skipped by user"));
       return {
         ok: false,
         exit_code: null,
@@ -117,7 +118,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
       };
     }
   } else if (decision.decision === "allow" && danger) {
-    console.log(chalk.dim(`  pre-approved by permissions config (rule: ${decision.rule}); skipping confirmation`));
+    log(chalk.dim(`  pre-approved by permissions config (rule: ${decision.rule}); skipping confirmation`));
   }
 
   const isWindows = process.platform === "win32";
@@ -167,7 +168,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
       const out = truncateOutput(stdoutBuf);
       const err = truncateOutput(stderrBuf);
       const summary = `exit ${code ?? "killed"}`;
-      console.log(chalk.dim(`  ${summary}`));
+      log(chalk.dim(`  ${summary}`));
       resolve({
         ok: code === 0,
         exit_code: code,

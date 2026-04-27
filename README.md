@@ -176,6 +176,34 @@ Useful for scripts, cron, or piping into other tools. All flags work the same â€
 }
 ```
 
+### MCP servers
+
+Connect remote MCP servers via `~/.arnie/mcp.json` (or `.arnie/mcp.json` per project):
+
+```json
+{
+  "servers": [
+    {
+      "type": "url",
+      "name": "github",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "authorization_token": "ghp_..."
+    }
+  ]
+}
+```
+
+Servers are passed through to the API's `mcp_servers` parameter; tool discovery, auth, and execution happen on Anthropic's side.
+
+### Image and file attachments
+
+Inside a user message, `attach <path>` pulls a file (or image) into the message as a content block. Supported images: jpg/png/gif/webp (max 8MB). Other files are read as text (max 200KB).
+
+```
+you> attach C:\Users\me\Desktop\error.png
+... what's this dialog box telling me?
+```
+
 ### Hooks
 
 `~/.arnie/hooks.json` (or `.arnie/hooks.json` in the project) runs shell commands when tools execute. Each hook list runs in parallel; per-command 5s timeout; failures are silent (best-effort).

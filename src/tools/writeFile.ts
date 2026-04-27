@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
+import { log } from "../log.js";
 
 const MAX_PREVIEW = 800;
 
@@ -29,9 +30,9 @@ export async function runWriteFile(input: WriteFileInput): Promise<WriteFileResu
   const resolved = path.resolve(input.path);
   const mode = input.mode ?? "overwrite";
 
-  console.log();
-  console.log(chalk.cyan("write ") + chalk.white(resolved) + chalk.dim(` (${input.content.length} bytes, mode=${mode})`));
-  if (input.reason) console.log(chalk.dim(`  reason: ${input.reason}`));
+  log();
+  log(chalk.cyan("write ") + chalk.white(resolved) + chalk.dim(` (${input.content.length} bytes, mode=${mode})`));
+  if (input.reason) log(chalk.dim(`  reason: ${input.reason}`));
 
   let exists = false;
   try {
@@ -56,19 +57,19 @@ export async function runWriteFile(input: WriteFileInput): Promise<WriteFileResu
     };
   }
 
-  console.log(chalk.dim("  --- preview ---"));
-  console.log(
+  log(chalk.dim("  --- preview ---"));
+  log(
     preview(input.content)
       .split("\n")
       .map((l) => chalk.dim("  | ") + l)
       .join("\n"),
   );
-  console.log(chalk.dim("  --- end preview ---"));
+  log(chalk.dim("  --- end preview ---"));
 
   const verb = exists ? "Overwrite" : "Create";
   const ok = await confirm(`  ${verb} ${resolved}?`);
   if (!ok) {
-    console.log(chalk.dim("  skipped by user"));
+    log(chalk.dim("  skipped by user"));
     return {
       ok: false,
       path: resolved,
@@ -81,7 +82,7 @@ export async function runWriteFile(input: WriteFileInput): Promise<WriteFileResu
     await fs.mkdir(path.dirname(resolved), { recursive: true });
     await fs.writeFile(resolved, input.content, "utf8");
     const bytes = Buffer.byteLength(input.content, "utf8");
-    console.log(chalk.green(`  wrote ${bytes} bytes`));
+    log(chalk.green(`  wrote ${bytes} bytes`));
     return {
       ok: true,
       path: resolved,
@@ -89,7 +90,7 @@ export async function runWriteFile(input: WriteFileInput): Promise<WriteFileResu
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red(`  error: ${message}`));
+    log(chalk.red(`  error: ${message}`));
     return {
       ok: false,
       path: resolved,

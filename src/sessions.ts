@@ -56,6 +56,57 @@ export interface SessionInfo {
   bytes: number;
 }
 
+export interface SearchHit {
+  session: string;
+  saved_at: string;
+  message_index: number;
+  role: "user" | "assistant";
+  snippet: string;
+}
+
+export async function searchSessions(query: string, maxResults: number = 30): Promise<SearchHit[]> {
+  const all = await listSessions();
+  const lower = query.toLowerCase();
+  const hits: SearchHit[] = [];
+  for (const meta of all) {
+    if (hits.length >= maxResults) break;
+    const session = await loadSession(meta.name);
+    if (!session) continue;
+    for (let i = 0; i < session.messages.length; i++) {
+      const msg = session.messages[i];
+      const text = extractText(msg.content).toLowerCase();
+      if (!text.includes(lower)) continue;
+      const original = extractText(msg.content);
+      const idx = original.toLowerCase().indexOf(lower);
+      const start = Math.max(0, idx - 60);
+      const end = Math.min(original.length, idx + lower.length + 60);
+      hits.push({
+        session: session.name,
+        saved_at: session.saved_at,
+        message_index: i,
+        role: msg.role,
+        snippet: (start > 0 ? "…" : "") + original.slice(start, end).replace(/\s+/g, " ") + (end < original.length ? "…" : ""),
+      });
+      if (hits.length >= maxResults) break;
+    }
+  }
+  return hits;
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        const block = b as Record<string, unknown>;
+        if (block.type === "text" && typeof block.text === "string") return block.text;
+        return "";
+      })
+      .join("\n");
+  }
+  return "";
+}
+
 export async function loadLastSession(): Promise<SavedSession | null> {
   const all = await listSessions();
   if (all.length === 0) return null;

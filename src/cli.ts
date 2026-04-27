@@ -25,8 +25,15 @@ import { initWorkspace } from "./init.js";
 import { renderStatusLine } from "./statusLine.js";
 import { createMarkdownRenderer } from "./markdown.js";
 import { exportConversation } from "./export.js";
+import { searchSessions } from "./sessions.js";
+import { loadMcpConfig, type McpConfig } from "./mcp.js";
+import { parseInput } from "./attach.js";
+import { bufferDelta, flushSpeech, clearSpeechBuffer } from "./voice.js";
+import { formatToolStats, resetToolStats } from "./toolStats.js";
+import { writeSettings, loadSettings as loadSettingsFile } from "./settings.js";
+import { setQuiet } from "./log.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -72,6 +79,7 @@ interface TurnContext {
   abortController: { current: AbortController | null };
   toolCtx: ToolContext;
   planMode: { current: boolean };
+  mcp: McpConfig;
 }
 
 function buildSystemForTurn(ctx: TurnContext): Anthropic.TextBlockParam[] {
@@ -98,6 +106,10 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
       stream: true,
     };
 
+    if (ctx.mcp.servers.length > 0) {
+      requestParams.mcp_servers = ctx.mcp.servers as unknown as Anthropic.Beta.MessageCreateParams["mcp_servers"];
+    }
+
     const edits: NonNullable<Anthropic.Beta.MessageCreateParams["context_management"]>["edits"] = [];
     if (ctx.config.compact) edits.push({ type: "compact_20260112" });
     if (!ctx.config.noContextEdit) edits.push({ type: "clear_tool_uses_20250919" });
@@ -113,6 +125,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
 
     stream.on("text", (delta) => {
       renderer.push(delta);
+      if (ctx.config.voice) bufferDelta(delta);
     });
 
     let message: Anthropic.Beta.BetaMessage;
@@ -131,7 +144,8 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
 
     renderer.flush();
     process.stdout.write("\n");
-    if (ctx.config.showUsage) {
+    if (ctx.config.voice) flushSpeech();
+    if (ctx.config.showUsage && !ctx.config.quiet) {
       console.log(formatTurnUsage(ctx.config.model, message.usage));
     }
     accumulate(ctx.totals, ctx.config.model, message.usage);
@@ -238,6 +252,7 @@ interface SlashContext {
   memoryFiles: MemoryFile[];
   skills: Skill[];
   planMode: { current: boolean };
+  turnCtx: TurnContext;
 }
 
 async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exit" | "continue" | null> {
@@ -252,12 +267,66 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     return "continue";
   }
   if (lower === "/clear") {
-    ctx.messages.length = 0;
-    console.log(chalk.dim("conversation cleared"));
+    if (arg === "--summary") {
+      await summarizeAndClear(ctx);
+    } else {
+      ctx.messages.length = 0;
+      resetToolStats();
+      console.log(chalk.dim("conversation cleared"));
+    }
     return "continue";
   }
   if (lower === "/usage") {
-    console.log(formatSessionTotals(ctx.totals));
+    if (arg === "tools") {
+      console.log(formatToolStats());
+    } else {
+      console.log(formatSessionTotals(ctx.totals));
+    }
+    return "continue";
+  }
+  if (lower === "/find") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /find <query>"));
+      return "continue";
+    }
+    const hits = await searchSessions(arg);
+    if (hits.length === 0) {
+      console.log(chalk.dim(`no matches for "${arg}"`));
+    } else {
+      console.log(chalk.bold(`${hits.length} matches:`));
+      for (const h of hits) {
+        console.log(`  ${chalk.white(h.session)} ${chalk.dim(`@${h.message_index} (${h.role}, ${h.saved_at})`)}`);
+        console.log(`    ${h.snippet}`);
+      }
+    }
+    return "continue";
+  }
+  if (lower === "/settings") {
+    if (!arg) {
+      const { settings, source } = await loadSettingsFile();
+      console.log(chalk.dim(`source: ${source ?? "(none — defaults)"}`));
+      console.log(JSON.stringify(settings, null, 2));
+      return "continue";
+    }
+    const [key, ...valParts] = arg.split(/\s+/);
+    const valueRaw = valParts.join(" ").trim();
+    if (!key || !valueRaw) {
+      console.log(chalk.yellow("usage: /settings | /settings <key> <value>"));
+      return "continue";
+    }
+    try {
+      const { settings } = await loadSettingsFile();
+      let value: unknown = valueRaw;
+      if (valueRaw === "true") value = true;
+      else if (valueRaw === "false") value = false;
+      else if (/^-?\d+$/.test(valueRaw)) value = parseInt(valueRaw, 10);
+      (settings as Record<string, unknown>)[key] = value;
+      const file = await writeSettings(settings);
+      console.log(chalk.dim(`set ${key}=${JSON.stringify(value)} → ${file}`));
+      console.log(chalk.dim(`(takes effect on next start)`));
+    } catch (err) {
+      console.error(chalk.red(`failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
     return "continue";
   }
   if (lower === "/tools") {
@@ -272,12 +341,16 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     return "continue";
   }
   if (lower === "/jobs") {
-    const js = listJobs();
-    if (js.length === 0) {
-      console.log(chalk.dim("no background jobs"));
+    if (arg === "--watch") {
+      await watchJobs();
     } else {
-      for (const j of js) {
-        console.log(`  ${chalk.white(j.id)} ${chalk.dim(`(${j.state}, ${j.elapsed_ms}ms, exit=${j.exit_code ?? "—"})`)} ${j.command}`);
+      const js = listJobs();
+      if (js.length === 0) {
+        console.log(chalk.dim("no background jobs"));
+      } else {
+        for (const j of js) {
+          console.log(`  ${chalk.white(j.id)} ${chalk.dim(`(${j.state}, ${j.elapsed_ms}ms, exit=${j.exit_code ?? "—"})`)} ${j.command}`);
+        }
       }
     }
     return "continue";
@@ -423,6 +496,68 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
   return null;
 }
 
+async function watchJobs(): Promise<void> {
+  while (true) {
+    const js = listJobs();
+    const running = js.filter((j) => j.state === "running");
+    if (running.length === 0) {
+      console.log(chalk.dim("all background jobs done"));
+      for (const j of js) {
+        console.log(`  ${chalk.white(j.id)} ${chalk.dim(`(${j.state}, ${j.elapsed_ms}ms, exit=${j.exit_code ?? "—"})`)} ${j.command}`);
+      }
+      return;
+    }
+    process.stdout.write(`\r${chalk.dim(`${running.length} job${running.length === 1 ? "" : "s"} running... `)}`);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+async function summarizeAndClear(slashCtx: SlashContext): Promise<void> {
+  if (slashCtx.messages.length === 0) {
+    console.log(chalk.dim("nothing to summarize"));
+    return;
+  }
+  console.log(chalk.dim("summarizing conversation before clear..."));
+
+  const ctx = slashCtx.turnCtx;
+  const summaryRequest: Anthropic.Beta.MessageCreateParamsNonStreaming = {
+    model: "claude-haiku-4-5",
+    max_tokens: 1024,
+    system: [
+      {
+        type: "text",
+        text: "You produce a 3-5 sentence summary of an IT troubleshooting conversation. Capture the user's problem, what was investigated, what was decided, and any outstanding items. Be concise and factual. No preamble.",
+      },
+    ],
+    messages: slashCtx.messages as Anthropic.Beta.BetaMessageParam[],
+  };
+
+  try {
+    const resp = await ctx.client.beta.messages.create(summaryRequest);
+    const text = resp.content
+      .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n")
+      .trim();
+
+    slashCtx.messages.length = 0;
+    if (text) {
+      slashCtx.messages.push({
+        role: "user",
+        content: `[Earlier conversation summary]\n${text}\n\n[End of summary — continuing fresh from here.]`,
+      });
+      console.log(chalk.dim("--- summary ---"));
+      console.log(text);
+      console.log(chalk.dim("--- end summary ---"));
+    }
+    resetToolStats();
+    console.log(chalk.dim("conversation reset to summary"));
+  } catch (err) {
+    console.error(chalk.red(`summary failed: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(chalk.dim("conversation NOT cleared"));
+  }
+}
+
 async function runPrintMode(ctx: TurnContext, message: string): Promise<void> {
   await ctx.transcript.appendUser(message);
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: message }];
@@ -467,6 +602,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  setQuiet(config.quiet);
+
   const client = new Anthropic({ maxRetries: 3 });
   let baseSystemBlocks = buildSystemBlocks(config.systemExtra);
 
@@ -501,6 +638,18 @@ async function main(): Promise<void> {
       }
     } catch (err) {
       console.error(chalk.red(`hooks load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
+  let mcpConfig: McpConfig = { servers: [], source: null };
+  if (!config.noMcp) {
+    try {
+      mcpConfig = await loadMcpConfig();
+      if (mcpConfig.source && mcpConfig.servers.length > 0) {
+        console.log(chalk.dim(`mcp: ${mcpConfig.servers.length} server(s) — ${mcpConfig.servers.map((s) => s.name).join(", ")}`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`mcp load failed: ${err instanceof Error ? err.message : String(err)}`));
     }
   }
 
@@ -552,6 +701,7 @@ async function main(): Promise<void> {
     abortController,
     toolCtx,
     planMode,
+    mcp: mcpConfig,
   };
 
   if (config.printMessage) {
@@ -586,6 +736,7 @@ async function main(): Promise<void> {
     memoryFiles,
     skills,
     planMode,
+    turnCtx: ctx,
   };
 
   let sigintCount = 0;
@@ -628,8 +779,19 @@ async function main(): Promise<void> {
       if (slash === "continue") continue;
     }
 
+    const parsed = await parseInput(line);
+    for (const e of parsed.errors) console.warn(chalk.yellow(e));
+    if (parsed.attachments.length > 0) {
+      for (const a of parsed.attachments) {
+        console.log(chalk.dim(`  attached ${a.type}: ${a.path} (${a.bytes} bytes)`));
+      }
+    }
     await transcript.appendUser(line);
-    messages.push({ role: "user", content: line });
+    if (parsed.blocks.length === 1 && parsed.blocks[0].type === "text") {
+      messages.push({ role: "user", content: line });
+    } else {
+      messages.push({ role: "user", content: parsed.blocks });
+    }
 
     await runTurn(ctx, messages);
     process.stdout.write("\n");

@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { READ_FILE_TOOL_DEFINITION, runReadFile, type ReadFileInput } from "./readFile.js";
 import { LIST_DIR_TOOL_DEFINITION, runListDir, type ListDirInput } from "./listDir.js";
 import { GREP_TOOL_DEFINITION, runGrep, type GrepInput } from "./grep.js";
+import { log } from "../log.js";
 
 const SUB_TOOLS: Anthropic.ToolUnion[] = [READ_FILE_TOOL_DEFINITION, LIST_DIR_TOOL_DEFINITION, GREP_TOOL_DEFINITION];
 
@@ -48,8 +49,8 @@ export interface SubagentResult {
 
 export async function runSubagent(input: SubagentInput, client: Anthropic): Promise<SubagentResult> {
   const model = input.model ?? "claude-haiku-4-5";
-  console.log();
-  console.log(chalk.cyan("subagent ") + chalk.dim(`(${model}) — `) + chalk.white(input.task.slice(0, 80) + (input.task.length > 80 ? "…" : "")));
+  log();
+  log(chalk.cyan("subagent ") + chalk.dim(`(${model}) — `) + chalk.white(input.task.slice(0, 80) + (input.task.length > 80 ? "…" : "")));
 
   const messages: Anthropic.MessageParam[] = [
     {
@@ -95,7 +96,7 @@ export async function runSubagent(input: SubagentInput, client: Anthropic): Prom
     if (textParts.length > 0) summary = textParts.join("\n").trim();
 
     if (resp.stop_reason !== "tool_use") {
-      console.log(chalk.dim(`  done in ${turn + 1} turn${turn === 0 ? "" : "s"}, ${usage.input + usage.output} tokens`));
+      log(chalk.dim(`  done in ${turn + 1} turn${turn === 0 ? "" : "s"}, ${usage.input + usage.output} tokens`));
       return { ok: true, task: input.task, model, summary, turns: turn + 1, usage };
     }
 
@@ -108,7 +109,7 @@ export async function runSubagent(input: SubagentInput, client: Anthropic): Prom
     messages.push({ role: "user", content: toolResults });
   }
 
-  console.log(chalk.yellow(`  hit max turns (${MAX_TURNS})`));
+  log(chalk.yellow(`  hit max turns (${MAX_TURNS})`));
   return {
     ok: true,
     task: input.task,

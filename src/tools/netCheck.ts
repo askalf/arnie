@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import chalk from "chalk";
+import { log } from "../log.js";
 
 const TIMEOUT_MS = 15_000;
 
@@ -56,8 +57,8 @@ function spawnCapture(cmd: string, args: string[]): Promise<{ code: number | nul
 }
 
 export async function runNetworkCheck(input: NetworkCheckInput): Promise<NetworkCheckResult> {
-  console.log();
-  console.log(chalk.cyan("net ") + chalk.white(input.host) + (input.port ? chalk.dim(`:${input.port}`) : ""));
+  log();
+  log(chalk.cyan("net ") + chalk.white(input.host) + (input.port ? chalk.dim(`:${input.port}`) : ""));
 
   const isWindows = process.platform === "win32";
   const result: NetworkCheckResult = {
@@ -74,7 +75,7 @@ export async function runNetworkCheck(input: NetworkCheckInput): Promise<Network
       reachable: r.code === 0,
       output: (r.stdout + r.stderr).trim().slice(-1500),
     };
-    console.log(chalk.dim(`  ping ${result.ping.reachable ? "ok" : "fail"}`));
+    log(chalk.dim(`  ping ${result.ping.reachable ? "ok" : "fail"}`));
   }
 
   if (input.port !== undefined) {
@@ -84,14 +85,14 @@ export async function runNetworkCheck(input: NetworkCheckInput): Promise<Network
       const out = (r.stdout + r.stderr).trim();
       const open = /TcpTestSucceeded=True/i.test(out) ? true : /TcpTestSucceeded=False/i.test(out) ? false : null;
       result.port_check = { open, output: out.slice(-1500) };
-      console.log(chalk.dim(`  port ${input.port} ${open === true ? "open" : open === false ? "closed/filtered" : "unknown"}`));
+      log(chalk.dim(`  port ${input.port} ${open === true ? "open" : open === false ? "closed/filtered" : "unknown"}`));
     } else {
       const sh = `if command -v nc >/dev/null 2>&1; then nc -z -w 3 '${input.host.replace(/'/g, "'\\''")}' ${input.port} && echo "OPEN" || echo "CLOSED"; elif command -v bash >/dev/null && bash -c 'true </dev/tcp/127.0.0.1/0' 2>/dev/null; then bash -c "exec 3<>/dev/tcp/${input.host}/${input.port}" >/dev/null 2>&1 && echo "OPEN" || echo "CLOSED"; else echo "no nc or bash /dev/tcp available"; fi`;
       const r = await spawnCapture("/bin/sh", ["-c", sh]);
       const out = (r.stdout + r.stderr).trim();
       const open = /\bOPEN\b/.test(out) ? true : /\bCLOSED\b/.test(out) ? false : null;
       result.port_check = { open, output: out.slice(-1500) };
-      console.log(chalk.dim(`  port ${input.port} ${open === true ? "open" : open === false ? "closed" : "unknown"}`));
+      log(chalk.dim(`  port ${input.port} ${open === true ? "open" : open === false ? "closed" : "unknown"}`));
     }
   }
 
@@ -135,8 +136,8 @@ export interface ServiceCheckResult {
 }
 
 export async function runServiceCheck(input: ServiceCheckInput): Promise<ServiceCheckResult> {
-  console.log();
-  console.log(chalk.cyan("services ") + chalk.dim(`name=${input.name ?? "*"} filter=${input.filter ?? "all"}`));
+  log();
+  log(chalk.cyan("services ") + chalk.dim(`name=${input.name ?? "*"} filter=${input.filter ?? "all"}`));
 
   const isWindows = process.platform === "win32";
   if (isWindows) {
@@ -171,7 +172,7 @@ export async function runServiceCheck(input: ServiceCheckInput): Promise<Service
         start_type: typeof start === "object" && start !== null ? String((start as { value?: unknown }).value ?? start) : start !== undefined ? String(start) : undefined,
       };
     });
-    console.log(chalk.dim(`  ${rows.length} services`));
+    log(chalk.dim(`  ${rows.length} services`));
     return { ok: true, platform: "windows", rows, truncated: rows.length === 100 };
   }
 
@@ -193,7 +194,7 @@ export async function runServiceCheck(input: ServiceCheckInput): Promise<Service
     if (input.name) rows = rows.filter((r) => r.name.toLowerCase().includes(input.name!.toLowerCase()));
     if (input.filter === "running") rows = rows.filter((r) => r.status === "running");
     if (input.filter === "stopped") rows = rows.filter((r) => r.status !== "running");
-    console.log(chalk.dim(`  ${rows.length} services`));
+    log(chalk.dim(`  ${rows.length} services`));
     return { ok: true, platform: "linux", rows, truncated: rows.length === 200 };
   }
 

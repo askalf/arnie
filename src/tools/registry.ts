@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { fireBeforeTool, fireAfterTool, fireOnError } from "../hooks.js";
+import { recordToolCall } from "../toolStats.js";
 
 import { SHELL_TOOL_DEFINITION, runShell } from "./shell.js";
 import { READ_FILE_TOOL_DEFINITION, runReadFile } from "./readFile.js";
@@ -178,12 +179,18 @@ export async function dispatchTool(name: string, input: unknown, ctx: ToolContex
     return JSON.stringify({ ok: false, error: errMsg });
   }
   await fireBeforeTool(name, parsed.data).catch(() => {});
+  const start = Date.now();
   try {
     const result = await handler.run(parsed.data, ctx);
     const resultStr = JSON.stringify(result);
+    const elapsed = Date.now() - start;
+    const ok = typeof result === "object" && result !== null && (result as { ok?: unknown }).ok === true;
+    recordToolCall(name, elapsed, ok);
     await fireAfterTool(name, parsed.data, resultStr).catch(() => {});
     return resultStr;
   } catch (err) {
+    const elapsed = Date.now() - start;
+    recordToolCall(name, elapsed, false);
     const msg = err instanceof Error ? err.message : String(err);
     await fireOnError(name, parsed.data, msg).catch(() => {});
     return JSON.stringify({ ok: false, error: `tool execution failed: ${msg}` });

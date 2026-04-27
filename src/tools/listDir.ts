@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
+import { log } from "../log.js";
 
 const MAX_ENTRIES = 500;
 
@@ -25,8 +26,8 @@ export interface ListDirResult {
 
 export async function runListDir(input: ListDirInput): Promise<ListDirResult> {
   const resolved = path.resolve(input.path);
-  console.log();
-  console.log(chalk.cyan("ls ") + chalk.white(resolved));
+  log();
+  log(chalk.cyan("ls ") + chalk.white(resolved));
 
   try {
     const stat = await fs.stat(resolved);
@@ -57,7 +58,7 @@ export async function runListDir(input: ListDirInput): Promise<ListDirResult> {
       entries.push({ name: d.name, type, size });
     }
 
-    console.log(chalk.dim(`  ${dirents.length} entries`));
+    log(chalk.dim(`  ${dirents.length} entries`));
     return {
       ok: true,
       path: resolved,
@@ -67,7 +68,7 @@ export async function runListDir(input: ListDirInput): Promise<ListDirResult> {
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red(`  error: ${message}`));
+    log(chalk.red(`  error: ${message}`));
     return {
       ok: false,
       path: resolved,

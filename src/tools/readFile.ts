@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
+import { log } from "../log.js";
 
 const MAX_FILE_BYTES = 200_000;
 
@@ -21,8 +22,8 @@ export interface ReadFileResult {
 
 export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult> {
   const resolved = path.resolve(input.path);
-  console.log();
-  console.log(chalk.cyan("read ") + chalk.white(resolved));
+  log();
+  log(chalk.cyan("read ") + chalk.white(resolved));
 
   try {
     const stat = await fs.stat(resolved);
@@ -52,7 +53,7 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
       truncated = true;
     }
 
-    console.log(chalk.dim(`  ${stat.size} bytes`));
+    log(chalk.dim(`  ${stat.size} bytes`));
     return {
       ok: true,
       path: resolved,
@@ -62,7 +63,7 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red(`  error: ${message}`));
+    log(chalk.red(`  error: ${message}`));
     return {
       ok: false,
       path: resolved,

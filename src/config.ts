@@ -21,6 +21,9 @@ export interface Config {
   noContextEdit: boolean;
   noStatusLine: boolean;
   noMarkdown: boolean;
+  noMcp: boolean;
+  quiet: boolean;
+  voice: boolean;
   init: boolean;
   printMessage?: string;
 }
@@ -45,6 +48,9 @@ const DEFAULTS: Config = {
   noContextEdit: false,
   noStatusLine: false,
   noMarkdown: false,
+  noMcp: false,
+  quiet: false,
+  voice: false,
   init: false,
 };
 
@@ -148,6 +154,16 @@ export function parseArgs(argv: string[], base?: Config): Config {
       case "--no-hooks":
         config.noHooks = true;
         break;
+      case "--no-mcp":
+        config.noMcp = true;
+        break;
+      case "--quiet":
+      case "-q":
+        config.quiet = true;
+        break;
+      case "--voice":
+        config.voice = true;
+        break;
       case "--no-web-search":
         config.noWebSearch = true;
         break;
@@ -191,8 +207,11 @@ Options:
   --no-memory             Don't load .arnie/memory.md
   --no-permissions        Ignore .arnie/permissions.json
   --no-hooks              Ignore .arnie/hooks.json
+  --no-mcp                Ignore .arnie/mcp.json
   --no-status-line        Don't render the status line
   --no-markdown           Don't render markdown (raw output)
+  -q, --quiet             Suppress tool execution chatter; only show responses
+  --voice                 Speak assistant responses (espeak/say/PowerShell SAPI)
   --no-transcript         Don't write a session transcript
   --transcript-dir <dir>  Directory for transcripts (default: ~/.arnie/transcripts)
   --no-usage              Don't display per-turn usage
@@ -208,19 +227,31 @@ Input:
   starts and ends multi-line mode for pasting logs and stack traces.
 
 Slash commands inside the REPL:
-  /help                   Show REPL help
-  /usage                  Show session token totals and cost estimate
-  /clear                  Reset the conversation
-  /tools                  List available tools
-  /save <name>            Save the current conversation
-  /load <name>            Load a saved conversation (replaces current)
-  /list                   List saved sessions
-  /memory                 Show the contents of memory files in use
-  /remember <fact>        Append a line to .arnie/memory.md
-  /skills                 List discovered skills
-  /jobs                   List running background shell jobs
-  /cd <path>              Change cwd for shell-tool calls
-  /exit                   Quit
+  /help                       Show REPL help
+  /usage                      Token totals and cost
+  /usage tools                Per-tool call counts and durations
+  /clear                      Reset the conversation
+  /clear --summary            Reset, replacing history with a model-written summary
+  /tools                      List available tools
+  /save <name>                Save the conversation
+  /load <name>                Load a saved conversation
+  /list                       List saved sessions
+  /find <query>               Search across saved sessions
+  /export <name>              Export current conversation to markdown
+  /memory                     Show loaded memory files
+  /remember <fact>            Append a line to .arnie/memory.md
+  /skills                     List discovered skills
+  /settings                   Show current settings
+  /settings <key> <value>     Set and persist a setting
+  /jobs                       List background shell jobs
+  /jobs --watch               Block until all background jobs finish
+  /plan                       Toggle plan mode
+  /cd <path>                  Change cwd
+  /exit                       Quit
+
+Input directives:
+  attach <path>           Attach an image (jpg/png/gif/webp) or text file
+                          to the message; can appear anywhere in the input.
 
 Environment:
   ANTHROPIC_API_KEY       Required.

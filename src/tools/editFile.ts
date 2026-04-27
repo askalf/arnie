@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
+import { log } from "../log.js";
 
 const MAX_PREVIEW_LINES = 12;
 
@@ -71,9 +72,9 @@ function diffPreview(before: string, after: string, oldStr: string, newStr: stri
 
 export async function runEditFile(input: EditFileInput): Promise<EditFileResult> {
   const resolved = path.resolve(input.path);
-  console.log();
-  console.log(chalk.cyan("edit ") + chalk.white(resolved));
-  if (input.reason) console.log(chalk.dim(`  reason: ${input.reason}`));
+  log();
+  log(chalk.cyan("edit ") + chalk.white(resolved));
+  if (input.reason) log(chalk.dim(`  reason: ${input.reason}`));
 
   if (input.old_string === input.new_string) {
     return { ok: false, path: resolved, error: "old_string and new_string are identical." };
@@ -84,7 +85,7 @@ export async function runEditFile(input: EditFileInput): Promise<EditFileResult>
     original = await fs.readFile(resolved, "utf8");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red(`  error: ${msg}`));
+    log(chalk.red(`  error: ${msg}`));
     return { ok: false, path: resolved, error: msg };
   }
 
@@ -110,18 +111,18 @@ export async function runEditFile(input: EditFileInput): Promise<EditFileResult>
     replacements = 1;
   }
 
-  console.log(chalk.dim(`  --- diff preview (${replacements} replacement${replacements === 1 ? "" : "s"}) ---`));
-  console.log(
+  log(chalk.dim(`  --- diff preview (${replacements} replacement${replacements === 1 ? "" : "s"}) ---`));
+  log(
     diffPreview(original, updated, input.old_string, input.new_string)
       .split("\n")
       .map((l) => `  ${l}`)
       .join("\n"),
   );
-  console.log(chalk.dim("  --- end preview ---"));
+  log(chalk.dim("  --- end preview ---"));
 
   const ok = await confirm("  Apply this edit?");
   if (!ok) {
-    console.log(chalk.dim("  skipped by user"));
+    log(chalk.dim("  skipped by user"));
     return {
       ok: false,
       path: resolved,
@@ -132,11 +133,11 @@ export async function runEditFile(input: EditFileInput): Promise<EditFileResult>
 
   try {
     await fs.writeFile(resolved, updated, "utf8");
-    console.log(chalk.green(`  applied ${replacements} replacement${replacements === 1 ? "" : "s"}`));
+    log(chalk.green(`  applied ${replacements} replacement${replacements === 1 ? "" : "s"}`));
     return { ok: true, path: resolved, replacements };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red(`  error: ${msg}`));
+    log(chalk.red(`  error: ${msg}`));
     return { ok: false, path: resolved, error: msg };
   }
 }

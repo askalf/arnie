@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import chalk from "chalk";
+import { log } from "../log.js";
 
 const MAX_MATCHES = 200;
 const MAX_FILE_SIZE = 10_000_000;
@@ -164,8 +165,8 @@ export async function runGrep(input: GrepInput): Promise<GrepResult> {
   const ctx = Math.max(0, Math.min(input.context ?? 0, 5));
   const flags = input.case_insensitive ? "i" : "";
 
-  console.log();
-  console.log(chalk.cyan("grep ") + chalk.white(`"${input.pattern}"`) + chalk.dim(` in ${root}`));
+  log();
+  log(chalk.cyan("grep ") + chalk.white(`"${input.pattern}"`) + chalk.dim(` in ${root}`));
 
   let pattern: RegExp;
   try {
@@ -203,7 +204,7 @@ export async function runGrep(input: GrepInput): Promise<GrepResult> {
   }
 
   const truncated = matches.length >= max;
-  console.log(chalk.dim(`  ${matches.length} match${matches.length === 1 ? "" : "es"} in ${filesScanned} file${filesScanned === 1 ? "" : "s"}`));
+  log(chalk.dim(`  ${matches.length} match${matches.length === 1 ? "" : "es"} in ${filesScanned} file${filesScanned === 1 ? "" : "s"}`));
   return {
     ok: true,
     pattern: input.pattern,

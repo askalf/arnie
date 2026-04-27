@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
+import { log } from "../log.js";
 
 const MAX_OUTPUT_BYTES = 200_000;
 
@@ -56,16 +57,16 @@ function looksDestructive(command: string): string | null {
 
 export async function runShellBackground(input: ShellBgInput): Promise<ShellBgResult> {
   const command = input.command;
-  console.log();
-  console.log(chalk.cyan("$ ") + chalk.white(command) + chalk.dim(" (background)"));
-  if (input.reason) console.log(chalk.dim(`  reason: ${input.reason}`));
+  log();
+  log(chalk.cyan("$ ") + chalk.white(command) + chalk.dim(" (background)"));
+  if (input.reason) log(chalk.dim(`  reason: ${input.reason}`));
 
   const danger = looksDestructive(command);
   if (danger) {
-    console.log(chalk.red(`  ⚠ flagged as potentially destructive: ${danger}`));
+    log(chalk.red(`  ⚠ flagged as potentially destructive: ${danger}`));
     const ok = await confirm("  Run this command in the background?");
     if (!ok) {
-      console.log(chalk.dim("  skipped by user"));
+      log(chalk.dim("  skipped by user"));
       return { ok: false, cancelled: true, error: "User declined to run this command." };
     }
   }
@@ -126,7 +127,7 @@ export async function runShellBackground(input: ShellBgInput): Promise<ShellBgRe
   });
 
   jobs.set(id, job);
-  console.log(chalk.dim(`  started ${id} (pid ${child.pid ?? "?"})`));
+  log(chalk.dim(`  started ${id} (pid ${child.pid ?? "?"})`));
   return { ok: true, job_id: id, command };
 }
 
@@ -183,8 +184,8 @@ export async function runShellStatus(input: ShellStatusInput): Promise<ShellStat
   const elapsed = (job.doneAt ?? Date.now()) - job.startedAt;
   const state: ShellStatusResult["state"] = job.doneAt === null ? "running" : job.killed ? "killed" : "exited";
 
-  console.log();
-  console.log(chalk.cyan("status ") + chalk.white(job.id) + chalk.dim(` (${state}, ${elapsed}ms)`));
+  log();
+  log(chalk.cyan("status ") + chalk.white(job.id) + chalk.dim(` (${state}, ${elapsed}ms)`));
 
   return {
     ok: true,
@@ -220,8 +221,8 @@ export async function runShellKill(input: ShellKillInput): Promise<ShellKillResu
   if (job.doneAt !== null) {
     return { ok: true, job_id: job.id, killed: false, error: "job already exited" };
   }
-  console.log();
-  console.log(chalk.cyan("kill ") + chalk.white(job.id));
+  log();
+  log(chalk.cyan("kill ") + chalk.white(job.id));
   job.killed = true;
   try {
     job.child.kill("SIGKILL");
