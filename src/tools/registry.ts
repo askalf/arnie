@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
+import { fireBeforeTool, fireAfterTool, fireOnError } from "../hooks.js";
 
 import { SHELL_TOOL_DEFINITION, runShell } from "./shell.js";
 import { READ_FILE_TOOL_DEFINITION, runReadFile } from "./readFile.js";
@@ -149,23 +150,42 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
   return tools;
 }
 
+const PARALLEL_SAFE = new Set([
+  "read_file",
+  "list_dir",
+  "grep",
+  "network_check",
+  "service_check",
+  "shell_status",
+  "subagent",
+]);
+
+export function isParallelSafe(name: string): boolean {
+  return PARALLEL_SAFE.has(name);
+}
+
 export async function dispatchTool(name: string, input: unknown, ctx: ToolContext): Promise<string> {
   const handler = HANDLERS[name];
   if (!handler) {
-    return JSON.stringify({ ok: false, error: `unknown tool: ${name}` });
+    const errMsg = `unknown tool: ${name}`;
+    await fireOnError(name, input, errMsg).catch(() => {});
+    return JSON.stringify({ ok: false, error: errMsg });
   }
   const parsed = handler.schema.safeParse(input);
   if (!parsed.success) {
-    return JSON.stringify({
-      ok: false,
-      error: `invalid input for ${name}: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`,
-    });
+    const errMsg = `invalid input for ${name}: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`;
+    await fireOnError(name, input, errMsg).catch(() => {});
+    return JSON.stringify({ ok: false, error: errMsg });
   }
+  await fireBeforeTool(name, parsed.data).catch(() => {});
   try {
     const result = await handler.run(parsed.data, ctx);
-    return JSON.stringify(result);
+    const resultStr = JSON.stringify(result);
+    await fireAfterTool(name, parsed.data, resultStr).catch(() => {});
+    return resultStr;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    await fireOnError(name, parsed.data, msg).catch(() => {});
     return JSON.stringify({ ok: false, error: `tool execution failed: ${msg}` });
   }
 }

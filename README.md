@@ -68,10 +68,15 @@ arnie> [reads the SMB error, investigates...]
 | `/clear` | Reset the conversation |
 | `/tools` | List registered tools |
 | `/jobs` | List background shell jobs |
+| `/skills` | List discovered skills |
 | `/memory` | Show loaded memory files |
+| `/remember <fact>` | Append a dated line to `.arnie/memory.md` |
+| `/cd <path>` | Change cwd mid-session |
 | `/save <name>` | Save the current conversation |
 | `/load <name>` | Replace the current conversation with a saved one |
 | `/list` | List saved sessions |
+| `/export <name>` | Export the current conversation as Markdown to `~/.arnie/exports/<name>.md` |
+| `/plan` | Toggle plan mode — model proposes a plan first and awaits approval before mutating tools |
 | `/exit` | Quit (or Ctrl+C twice) |
 
 ### Tools the model can use
@@ -144,6 +149,53 @@ arnie --resume printer-issue   # picks up where /save printer-issue left off
 arnie --init    # scaffolds .arnie/ with memory.md, permissions.json, an example skill
 ```
 
+### Non-interactive single turn
+
+```sh
+arnie --print "diagnose disk i/o"     # one turn, prints response, exits
+```
+
+Useful for scripts, cron, or piping into other tools. All flags work the same — disable usage display, transcripts, etc., as needed.
+
+### Settings file
+
+`~/.arnie/settings.json` provides defaults that CLI flags override:
+
+```json
+{
+  "model": "claude-opus-4-7",
+  "effort": "xhigh",
+  "maxTokens": 64000,
+  "compact": true,
+  "subagent": true,
+  "memory": true,
+  "skills": true,
+  "permissions": true,
+  "statusLine": true,
+  "markdown": true
+}
+```
+
+### Hooks
+
+`~/.arnie/hooks.json` (or `.arnie/hooks.json` in the project) runs shell commands when tools execute. Each hook list runs in parallel; per-command 5s timeout; failures are silent (best-effort).
+
+```json
+{
+  "before_tool": [
+    "echo \"$ARNIE_TOOL_NAME starting at $(date -Iseconds)\" >> /tmp/arnie-tools.log"
+  ],
+  "after_tool": [
+    "echo \"$ARNIE_TOOL_NAME finished\" >> /tmp/arnie-tools.log"
+  ],
+  "on_error": [
+    "logger -t arnie \"$ARNIE_TOOL_NAME failed: $ARNIE_TOOL_ERROR\""
+  ]
+}
+```
+
+Available env vars in hook commands: `ARNIE_TOOL_NAME`, `ARNIE_TOOL_INPUT` (JSON, capped at 4KB), `ARNIE_TOOL_RESULT` (JSON, capped at 4KB), `ARNIE_TOOL_ERROR`.
+
 ## Flags
 
 ```
@@ -158,11 +210,15 @@ arnie --init    # scaffolds .arnie/ with memory.md, permissions.json, an example
 --no-skills             Don't load .arnie/skills/*
 --no-memory             Don't load .arnie/memory.md or ARNIE.md
 --no-permissions        Ignore .arnie/permissions.json
+--no-hooks              Ignore .arnie/hooks.json
+--no-status-line        Don't render the status line
+--no-markdown           Don't render markdown (raw output)
 --no-transcript         Don't write a session transcript
 --transcript-dir <dir>  Transcript directory (default: ~/.arnie/transcripts)
 --no-usage              Hide per-turn token/cost display
 --system-extra <text>   Append text to the system prompt
---resume <name>         Resume a saved session by name
+--resume [name]         Resume a saved session (most recent if no name)
+-p, --print <msg>       Run a single non-interactive turn and exit
 --init                  Scaffold .arnie/ in current cwd and exit
 --version               Print version and exit
 -h, --help              Show help

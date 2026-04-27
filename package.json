@@ -1,6 +1,6 @@
 {
   "name": "arnie",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Portable IT troubleshooting companion powered by Claude",
   "type": "module",
   "bin": {

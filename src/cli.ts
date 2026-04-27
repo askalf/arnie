@@ -9,20 +9,27 @@ import path from "node:path";
 import { buildSystemBlocks, appendMemoryBlock } from "./systemPrompt.js";
 import { closeReadline } from "./confirm.js";
 import { readUserInput } from "./input.js";
-import { parseArgs, HELP_TEXT, type Config } from "./config.js";
+import { parseArgs, applySettings, HELP_TEXT, type Config } from "./config.js";
+import { loadSettings } from "./settings.js";
 import { accumulate, emptyTotals, formatSessionTotals, formatTurnUsage } from "./usage.js";
 import { createTranscriptWriter, type TranscriptWriter } from "./transcript.js";
-import { buildToolList, dispatchTool, type ToolContext } from "./tools/registry.js";
+import { buildToolList, dispatchTool, isParallelSafe, type ToolContext } from "./tools/registry.js";
 import { listJobs } from "./tools/backgroundShell.js";
 import { setShellPermissions } from "./tools/shell.js";
-import { saveSession, loadSession, listSessions } from "./sessions.js";
+import { saveSession, loadSession, listSessions, loadLastSession } from "./sessions.js";
 import { loadMemoryFiles, formatMemoryBlock, type MemoryFile } from "./memory.js";
 import { discoverSkills, formatSkillsBlock, type Skill } from "./skills.js";
 import { loadPermissions } from "./permissions.js";
+import { loadHooks, setHooks, describeHooks } from "./hooks.js";
 import { initWorkspace } from "./init.js";
+import { renderStatusLine } from "./statusLine.js";
+import { createMarkdownRenderer } from "./markdown.js";
+import { exportConversation } from "./export.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const COMPACT_BETA = "compact-2026-01-12";
+
+const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
 
 const BANNER = `${chalk.bold.cyan("arnie")} ${chalk.dim(`v${VERSION} — IT troubleshooting companion`)}
 ${chalk.dim("type")} ${chalk.white("/help")} ${chalk.dim("for commands,")} ${chalk.white(`"""`)} ${chalk.dim('for multi-line input,')} ${chalk.white("/exit")} ${chalk.dim("to quit")}
@@ -41,6 +48,8 @@ const REPL_HELP = `${chalk.bold("Slash commands:")}
   ${chalk.white("/save <name>")}     save the current conversation
   ${chalk.white("/load <name>")}     load a saved conversation
   ${chalk.white("/list")}            list saved sessions
+  ${chalk.white("/export <name>")}   export current conversation as markdown
+  ${chalk.white("/plan")}            toggle plan mode
   ${chalk.white("/exit")}            quit (or Ctrl+C twice)
 ${chalk.bold("Input:")}
   Type a message and press Enter. Use ${chalk.white(`"""`)} on its own line to start
@@ -56,16 +65,23 @@ ${chalk.bold("Tools available to the model:")}
 interface TurnContext {
   client: Anthropic;
   config: Config;
-  systemBlocks: Anthropic.TextBlockParam[];
+  baseSystemBlocks: Anthropic.TextBlockParam[];
   tools: Anthropic.ToolUnion[];
   totals: ReturnType<typeof emptyTotals>;
   transcript: TranscriptWriter;
   abortController: { current: AbortController | null };
   toolCtx: ToolContext;
+  planMode: { current: boolean };
+}
+
+function buildSystemForTurn(ctx: TurnContext): Anthropic.TextBlockParam[] {
+  if (!ctx.planMode.current) return ctx.baseSystemBlocks;
+  return [...ctx.baseSystemBlocks, { type: "text", text: PLAN_MODE_BLOCK }];
 }
 
 async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Promise<void> {
   while (true) {
+    const renderer = createMarkdownRenderer(!ctx.config.noMarkdown);
     process.stdout.write(chalk.dim("arnie: "));
 
     ctx.abortController.current = new AbortController();
@@ -75,7 +91,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
       max_tokens: ctx.config.maxTokens,
       thinking: ctx.config.thinking === "adaptive" ? { type: "adaptive" } : { type: "disabled" },
       output_config: { effort: ctx.config.effort },
-      system: ctx.systemBlocks,
+      system: buildSystemForTurn(ctx),
       messages: messages as Anthropic.Beta.BetaMessageParam[],
       tools: ctx.tools as Anthropic.Beta.BetaToolUnion[],
       cache_control: { type: "ephemeral" },
@@ -83,15 +99,9 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
     };
 
     const edits: NonNullable<Anthropic.Beta.MessageCreateParams["context_management"]>["edits"] = [];
-    if (ctx.config.compact) {
-      edits.push({ type: "compact_20260112" });
-    }
-    if (!ctx.config.noContextEdit) {
-      edits.push({ type: "clear_tool_uses_20250919" });
-    }
-    if (edits.length > 0) {
-      requestParams.context_management = { edits };
-    }
+    if (ctx.config.compact) edits.push({ type: "compact_20260112" });
+    if (!ctx.config.noContextEdit) edits.push({ type: "clear_tool_uses_20250919" });
+    if (edits.length > 0) requestParams.context_management = { edits };
 
     const betas: string[] = [];
     if (ctx.config.compact) betas.push(COMPACT_BETA);
@@ -102,7 +112,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
     );
 
     stream.on("text", (delta) => {
-      process.stdout.write(delta);
+      renderer.push(delta);
     });
 
     let message: Anthropic.Beta.BetaMessage;
@@ -110,6 +120,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
       message = await stream.finalMessage();
     } catch (err) {
       ctx.abortController.current = null;
+      renderer.flush();
       process.stdout.write("\n");
       const handled = handleApiError(err);
       await ctx.transcript.appendError(handled);
@@ -118,6 +129,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
     }
     ctx.abortController.current = null;
 
+    renderer.flush();
     process.stdout.write("\n");
     if (ctx.config.showUsage) {
       console.log(formatTurnUsage(ctx.config.model, message.usage));
@@ -147,15 +159,36 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
       (b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use",
     );
 
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const tool of toolUseBlocks) {
-      const result = await dispatchTool(tool.name, tool.input, ctx.toolCtx);
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: tool.id,
-        content: result,
-      });
+    const parallelGroup: Anthropic.Beta.BetaToolUseBlock[] = [];
+    const serialGroup: Anthropic.Beta.BetaToolUseBlock[] = [];
+    for (const t of toolUseBlocks) {
+      if (isParallelSafe(t.name)) parallelGroup.push(t);
+      else serialGroup.push(t);
     }
+
+    const resultsById = new Map<string, string>();
+
+    if (parallelGroup.length > 0) {
+      if (parallelGroup.length > 1) {
+        console.log(chalk.dim(`  [running ${parallelGroup.length} read-only tools in parallel]`));
+      }
+      await Promise.all(
+        parallelGroup.map(async (t) => {
+          const r = await dispatchTool(t.name, t.input, ctx.toolCtx);
+          resultsById.set(t.id, r);
+        }),
+      );
+    }
+    for (const t of serialGroup) {
+      const r = await dispatchTool(t.name, t.input, ctx.toolCtx);
+      resultsById.set(t.id, r);
+    }
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = toolUseBlocks.map((t) => ({
+      type: "tool_result",
+      tool_use_id: t.id,
+      content: resultsById.get(t.id) ?? JSON.stringify({ ok: false, error: "tool result missing" }),
+    }));
 
     await ctx.transcript.appendToolResults(toolResults);
     messages.push({ role: "user", content: toolResults });
@@ -204,6 +237,7 @@ interface SlashContext {
   tools: Anthropic.ToolUnion[];
   memoryFiles: MemoryFile[];
   skills: Skill[];
+  planMode: { current: boolean };
 }
 
 async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exit" | "continue" | null> {
@@ -286,11 +320,11 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
         exists = false;
       }
       const ts = new Date().toISOString().slice(0, 10);
-      const line = `- ${arg} ${chalk.reset("")}_(added ${ts})_\n`.replace(/\[[0-9;]*m/g, "");
+      const newLine = `- ${arg} _(added ${ts})_\n`;
       if (!exists) {
-        await fs.writeFile(projectMem, `# Arnie memory\n\n${line}`, "utf8");
+        await fs.writeFile(projectMem, `# Arnie memory\n\n${newLine}`, "utf8");
       } else {
-        await fs.appendFile(projectMem, line, "utf8");
+        await fs.appendFile(projectMem, newLine, "utf8");
       }
       console.log(chalk.dim(`appended to ${projectMem}`));
     } catch (err) {
@@ -361,19 +395,58 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     }
     return "continue";
   }
+  if (lower === "/export") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /export <name>"));
+      return "continue";
+    }
+    if (ctx.messages.length === 0) {
+      console.log(chalk.yellow("nothing to export"));
+      return "continue";
+    }
+    try {
+      const file = await exportConversation(arg, ctx.model, ctx.messages);
+      console.log(chalk.dim(`exported ${ctx.messages.length} messages → ${file}`));
+    } catch (err) {
+      console.error(chalk.red(`export failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
+  if (lower === "/plan") {
+    ctx.planMode.current = !ctx.planMode.current;
+    console.log(chalk.magenta(`plan mode ${ctx.planMode.current ? "ON" : "OFF"}`));
+    if (ctx.planMode.current) {
+      console.log(chalk.dim("the model will propose a plan before mutating tools; approve with 'ok'/'go'/'proceed'."));
+    }
+    return "continue";
+  }
   return null;
 }
 
+async function runPrintMode(ctx: TurnContext, message: string): Promise<void> {
+  await ctx.transcript.appendUser(message);
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: message }];
+  await runTurn(ctx, messages);
+}
+
 async function main(): Promise<void> {
-  let config: Config;
+  let initialConfig: Config;
   try {
-    config = parseArgs(process.argv.slice(2));
+    const { settings, source: settingsSource } = await loadSettings();
+    const base = applySettings(settings);
+    initialConfig = parseArgs(process.argv.slice(2), base);
+    if (settingsSource && !initialConfig.showHelp && !initialConfig.showVersion && !initialConfig.init) {
+      // log only when actually running the REPL
+      console.log(chalk.dim(`settings: ${settingsSource}`));
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(chalk.red(`error: ${msg}`));
     console.error(`run with --help for usage`);
     process.exit(2);
   }
+
+  const config = initialConfig;
 
   if (config.showHelp) {
     console.log(HELP_TEXT);
@@ -395,16 +468,16 @@ async function main(): Promise<void> {
   }
 
   const client = new Anthropic({ maxRetries: 3 });
-  let systemBlocks = buildSystemBlocks(config.systemExtra);
+  let baseSystemBlocks = buildSystemBlocks(config.systemExtra);
 
   const memoryFiles = config.noMemory ? [] : await loadMemoryFiles();
   if (memoryFiles.length > 0) {
-    systemBlocks = appendMemoryBlock(systemBlocks, formatMemoryBlock(memoryFiles));
+    baseSystemBlocks = appendMemoryBlock(baseSystemBlocks, formatMemoryBlock(memoryFiles));
   }
 
   const skills = config.noSkills ? [] : await discoverSkills();
   if (skills.length > 0) {
-    systemBlocks = appendMemoryBlock(systemBlocks, formatSkillsBlock(skills));
+    baseSystemBlocks = appendMemoryBlock(baseSystemBlocks, formatSkillsBlock(skills));
   }
 
   if (!config.noPermissions) {
@@ -419,15 +492,30 @@ async function main(): Promise<void> {
     }
   }
 
+  if (!config.noHooks) {
+    try {
+      const hooks = await loadHooks();
+      setHooks(hooks);
+      if (hooks.source) {
+        console.log(chalk.dim(`hooks: ${describeHooks()}`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`hooks load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
   const tools = buildToolList({ webSearch: !config.noWebSearch, subagent: !config.noSubagent });
   const toolCtx: ToolContext = { client };
 
   const messages: Anthropic.MessageParam[] = [];
-  if (config.resume) {
+  if (config.resume || config.resumeLast) {
     try {
-      const session = await loadSession(config.resume);
+      const session = config.resume
+        ? await loadSession(config.resume)
+        : await loadLastSession();
       if (!session) {
-        console.error(chalk.red(`no saved session named "${config.resume}"`));
+        const target = config.resume ?? "(most recent)";
+        console.error(chalk.red(`no saved session matching "${target}"`));
         process.exit(1);
       }
       messages.push(...session.messages);
@@ -439,6 +527,7 @@ async function main(): Promise<void> {
   }
 
   const totals = emptyTotals();
+  const planMode = { current: false };
 
   const transcript = createTranscriptWriter({
     enabled: config.transcript,
@@ -451,6 +540,26 @@ async function main(): Promise<void> {
     hostname: os.hostname(),
     user: os.userInfo().username,
   });
+
+  const abortController: { current: AbortController | null } = { current: null };
+  const ctx: TurnContext = {
+    client,
+    config,
+    baseSystemBlocks,
+    tools,
+    totals,
+    transcript,
+    abortController,
+    toolCtx,
+    planMode,
+  };
+
+  if (config.printMessage) {
+    await runPrintMode(ctx, config.printMessage);
+    await transcript.endSession();
+    closeReadline();
+    process.exit(0);
+  }
 
   process.stdout.write(BANNER);
   console.log(
@@ -469,17 +578,6 @@ async function main(): Promise<void> {
   }
   console.log();
 
-  const abortController: { current: AbortController | null } = { current: null };
-  const ctx: TurnContext = {
-    client,
-    config,
-    systemBlocks,
-    tools,
-    totals,
-    transcript,
-    abortController,
-    toolCtx,
-  };
   const slashCtx: SlashContext = {
     messages,
     totals,
@@ -487,6 +585,7 @@ async function main(): Promise<void> {
     tools,
     memoryFiles,
     skills,
+    planMode,
   };
 
   let sigintCount = 0;
@@ -508,6 +607,17 @@ async function main(): Promise<void> {
 
   while (true) {
     sigintCount = 0;
+    if (!config.noStatusLine) {
+      console.log(
+        renderStatusLine({
+          model: config.model,
+          effort: config.effort,
+          cwd: process.cwd(),
+          totals,
+          planMode: planMode.current,
+        }),
+      );
+    }
     const line = await readUserInput();
     if (line === null) break;
     if (!line.trim()) continue;

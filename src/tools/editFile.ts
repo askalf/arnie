@@ -21,20 +21,52 @@ export interface EditFileResult {
   cancelled?: boolean;
 }
 
-function diffPreview(before: string, after: string, oldStr: string): string {
+function diffPreview(before: string, after: string, oldStr: string, newStr: string): string {
   const idx = before.indexOf(oldStr);
   if (idx === -1) return "(diff: pattern not found)";
-  const startBefore = before.lastIndexOf("\n", idx) + 1;
-  const beforeLine = before.slice(0, idx).split("\n").length;
-  const oldLines = oldStr.split("\n");
-  const newLines = after.slice(startBefore).split("\n").slice(0, MAX_PREVIEW_LINES).join("\n");
-  const oldPreview = oldLines.slice(0, MAX_PREVIEW_LINES).join("\n");
-  return [
-    chalk.red(`-${"-".repeat(40)} (line ${beforeLine})`),
-    ...oldPreview.split("\n").map((l) => chalk.red(`- ${l}`)),
-    chalk.green(`+${"-".repeat(40)}`),
-    ...newLines.split("\n").map((l) => chalk.green(`+ ${l}`)),
-  ].join("\n");
+
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+
+  const startCharsBefore = before.slice(0, idx);
+  const startLineIdx = startCharsBefore.split("\n").length - 1;
+  const oldLineCount = oldStr.split("\n").length;
+  const newLineCount = newStr.split("\n").length;
+
+  const ctxBefore = 2;
+  const ctxAfter = 2;
+  const headerLine = startLineIdx + 1;
+
+  const out: string[] = [];
+  out.push(chalk.dim(`@@ line ${headerLine} @@`));
+
+  const ctxStart = Math.max(0, startLineIdx - ctxBefore);
+  for (let i = ctxStart; i < startLineIdx; i++) {
+    out.push(chalk.dim(`  ${beforeLines[i]}`));
+  }
+
+  const oldSection = beforeLines.slice(startLineIdx, startLineIdx + oldLineCount);
+  for (const l of oldSection.slice(0, MAX_PREVIEW_LINES)) {
+    out.push(chalk.red(`- ${l}`));
+  }
+  if (oldSection.length > MAX_PREVIEW_LINES) {
+    out.push(chalk.dim(`  ... (${oldSection.length - MAX_PREVIEW_LINES} more removed lines)`));
+  }
+
+  const newSection = afterLines.slice(startLineIdx, startLineIdx + newLineCount);
+  for (const l of newSection.slice(0, MAX_PREVIEW_LINES)) {
+    out.push(chalk.green(`+ ${l}`));
+  }
+  if (newSection.length > MAX_PREVIEW_LINES) {
+    out.push(chalk.dim(`  ... (${newSection.length - MAX_PREVIEW_LINES} more added lines)`));
+  }
+
+  const tailStart = startLineIdx + newLineCount;
+  for (let i = tailStart; i < Math.min(afterLines.length, tailStart + ctxAfter); i++) {
+    out.push(chalk.dim(`  ${afterLines[i]}`));
+  }
+
+  return out.join("\n");
 }
 
 export async function runEditFile(input: EditFileInput): Promise<EditFileResult> {
@@ -79,7 +111,12 @@ export async function runEditFile(input: EditFileInput): Promise<EditFileResult>
   }
 
   console.log(chalk.dim(`  --- diff preview (${replacements} replacement${replacements === 1 ? "" : "s"}) ---`));
-  console.log(diffPreview(original, updated, input.old_string));
+  console.log(
+    diffPreview(original, updated, input.old_string, input.new_string)
+      .split("\n")
+      .map((l) => `  ${l}`)
+      .join("\n"),
+  );
   console.log(chalk.dim("  --- end preview ---"));
 
   const ok = await confirm("  Apply this edit?");

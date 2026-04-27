@@ -3,21 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { runReadFile } from "./tools/readFile.js";
-import { runShell } from "./tools/shell.js";
+import { setShellPermissions, runShell } from "./tools/shell.js";
 import { runListDir } from "./tools/listDir.js";
 import { runGrep } from "./tools/grep.js";
 import { runShellBackground, runShellStatus, runShellKill, listJobs } from "./tools/backgroundShell.js";
-import { dispatchTool, buildToolList } from "./tools/registry.js";
-import { parseArgs } from "./config.js";
+import { dispatchTool, buildToolList, isParallelSafe } from "./tools/registry.js";
+import { parseArgs, applySettings } from "./config.js";
 import { accumulate, emptyTotals, turnCost } from "./usage.js";
 import { createTranscriptWriter } from "./transcript.js";
-import { saveSession, loadSession, listSessions } from "./sessions.js";
+import { saveSession, loadSession, listSessions, loadLastSession } from "./sessions.js";
 import { loadMemoryFiles, formatMemoryBlock } from "./memory.js";
 import { runEditFile } from "./tools/editFile.js";
 import { discoverSkills, formatSkillsBlock } from "./skills.js";
-import { evaluateCommand, loadPermissions } from "./permissions.js";
-import { setShellPermissions, runShell } from "./tools/shell.js";
+import { evaluateCommand } from "./permissions.js";
 import { initWorkspace } from "./init.js";
+import { renderStatusLine } from "./statusLine.js";
+import { createMarkdownRenderer } from "./markdown.js";
+import { exportConversation } from "./export.js";
 
 interface Case {
   name: string;
@@ -691,6 +693,162 @@ async function initTests(): Promise<void> {
   await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
+function settingsTests(): void {
+  const c = applySettings({ model: "claude-sonnet-4-6", effort: "medium", maxTokens: 8000, compact: false });
+  cases.push({
+    name: "settings: applies overrides",
+    pass: c.model === "claude-sonnet-4-6" && c.effort === "medium" && c.maxTokens === 8000 && !c.compact,
+    detail: `model=${c.model} effort=${c.effort} max=${c.maxTokens} compact=${c.compact}`,
+  });
+
+  const c2 = parseArgs(["--effort", "low"], applySettings({ effort: "max", maxTokens: 999 }));
+  cases.push({
+    name: "settings: CLI flag overrides settings",
+    pass: c2.effort === "low" && c2.maxTokens === 999,
+    detail: `effort=${c2.effort} max=${c2.maxTokens}`,
+  });
+
+  const c3 = applySettings({ webSearch: false, subagent: false, statusLine: false, markdown: false });
+  cases.push({
+    name: "settings: boolean toggles map to noX",
+    pass: c3.noWebSearch && c3.noSubagent && c3.noStatusLine && c3.noMarkdown,
+    detail: "ok",
+  });
+}
+
+function parallelSafeTests(): void {
+  cases.push({
+    name: "parallel-safe: read-only tools tagged",
+    pass:
+      isParallelSafe("read_file") &&
+      isParallelSafe("list_dir") &&
+      isParallelSafe("grep") &&
+      isParallelSafe("network_check") &&
+      isParallelSafe("service_check") &&
+      isParallelSafe("subagent") &&
+      isParallelSafe("shell_status"),
+    detail: "all read-only tools parallel-safe",
+  });
+  cases.push({
+    name: "parallel-safe: prompting tools NOT tagged",
+    pass:
+      !isParallelSafe("shell") &&
+      !isParallelSafe("write_file") &&
+      !isParallelSafe("edit_file") &&
+      !isParallelSafe("shell_background") &&
+      !isParallelSafe("shell_kill"),
+    detail: "ok",
+  });
+}
+
+async function exportTests(): Promise<void> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: "what is 2+2" },
+    { role: "assistant", content: [{ type: "text", text: "4" }] },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "let me check" },
+        { type: "tool_use", id: "tu_1", name: "read_file", input: { path: "x" } },
+      ],
+    },
+  ];
+  const file = await exportConversation("test-export", "claude-opus-4-7", messages);
+  const content = await fs.readFile(file, "utf8");
+  cases.push({
+    name: "export: writes markdown header and turns",
+    pass: content.includes("# arnie session: test-export") && content.includes("### User") && content.includes("### Arnie") && content.includes("4"),
+    detail: `${content.length} chars`,
+  });
+  cases.push({
+    name: "export: serializes tool_use blocks",
+    pass: content.includes("tool_use") && content.includes("read_file"),
+    detail: "ok",
+  });
+  await fs.unlink(file).catch(() => {});
+}
+
+function statusLineTests(): void {
+  const totals = emptyTotals();
+  totals.costUsd = 0.1234;
+  totals.turns = 5;
+  const line = renderStatusLine({
+    model: "claude-opus-4-7",
+    effort: "xhigh",
+    cwd: "/tmp/foo",
+    totals,
+    planMode: false,
+  });
+  cases.push({
+    name: "status_line: contains model and cost",
+    pass: line.includes("claude-opus-4-7") && line.includes("$0.1234") && line.includes("turns=5"),
+    detail: "ok",
+  });
+
+  const planLine = renderStatusLine({
+    model: "claude-opus-4-7",
+    effort: "high",
+    cwd: "/tmp/foo",
+    totals,
+    planMode: true,
+  });
+  cases.push({
+    name: "status_line: shows plan tag when on",
+    pass: planLine.includes("[plan]"),
+    detail: "ok",
+  });
+}
+
+function markdownTests(): void {
+  const captured: string[] = [];
+  const origWrite = process.stdout.write.bind(process.stdout);
+  // @ts-expect-error reassign
+  process.stdout.write = (chunk: string | Uint8Array): boolean => {
+    captured.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  };
+  try {
+    const r = createMarkdownRenderer(true);
+    r.push("# Header\n");
+    r.push("**bold** and `code`\n");
+    r.push("- bullet point\n");
+    r.push("```js\nconsole.log('hi');\n```\n");
+    r.flush();
+  } finally {
+    // @ts-expect-error restore
+    process.stdout.write = origWrite;
+  }
+  const out = captured.join("");
+  cases.push({
+    name: "markdown: emits formatted output",
+    pass: out.includes("Header") && out.includes("bold") && out.includes("bullet") && out.includes("console.log"),
+    detail: `${out.length} chars`,
+  });
+  cases.push({
+    name: "markdown: code fence renders",
+    pass: out.includes("┌─") && out.includes("└─"),
+    detail: "ok",
+  });
+}
+
+async function autoResumeTests(): Promise<void> {
+  // Save two sessions; loadLastSession should return the more recent one
+  await saveSession("auto-resume-1", "claude-opus-4-7", [{ role: "user", content: "first" }]);
+  await new Promise((r) => setTimeout(r, 30));
+  await saveSession("auto-resume-2", "claude-opus-4-7", [{ role: "user", content: "second" }]);
+
+  const last = await loadLastSession();
+  cases.push({
+    name: "loadLastSession: returns most recent",
+    pass: last !== null && last.name === "auto-resume-2",
+    detail: last ? `name=${last.name}` : "null",
+  });
+
+  const sessionDir = path.join(os.homedir(), ".arnie", "sessions");
+  await fs.unlink(path.join(sessionDir, "auto-resume-1.json")).catch(() => {});
+  await fs.unlink(path.join(sessionDir, "auto-resume-2.json")).catch(() => {});
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -707,6 +865,12 @@ async function main(): Promise<void> {
   await permissionsTests();
   await skillsTests();
   await initTests();
+  settingsTests();
+  parallelSafeTests();
+  await exportTests();
+  statusLineTests();
+  markdownTests();
+  await autoResumeTests();
 
   console.log();
   console.log("=".repeat(70));

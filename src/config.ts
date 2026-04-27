@@ -11,13 +11,18 @@ export interface Config {
   showVersion: boolean;
   compact: boolean;
   resume?: string;
+  resumeLast: boolean;
   noWebSearch: boolean;
   noMemory: boolean;
   noSubagent: boolean;
   noSkills: boolean;
   noPermissions: boolean;
+  noHooks: boolean;
   noContextEdit: boolean;
+  noStatusLine: boolean;
+  noMarkdown: boolean;
   init: boolean;
+  printMessage?: string;
 }
 
 const DEFAULTS: Config = {
@@ -30,19 +35,47 @@ const DEFAULTS: Config = {
   showHelp: false,
   showVersion: false,
   compact: true,
+  resumeLast: false,
   noWebSearch: false,
   noMemory: false,
   noSubagent: false,
   noSkills: false,
   noPermissions: false,
+  noHooks: false,
   noContextEdit: false,
+  noStatusLine: false,
+  noMarkdown: false,
   init: false,
 };
 
+import type { Settings } from "./settings.js";
+
+export function applySettings(settings: Settings): Config {
+  const c: Config = { ...DEFAULTS };
+  if (settings.model) c.model = settings.model;
+  if (settings.effort) c.effort = settings.effort;
+  if (typeof settings.maxTokens === "number") c.maxTokens = settings.maxTokens;
+  if (settings.thinking) c.thinking = settings.thinking;
+  if (typeof settings.compact === "boolean") c.compact = settings.compact;
+  if (typeof settings.contextEdit === "boolean") c.noContextEdit = !settings.contextEdit;
+  if (typeof settings.webSearch === "boolean") c.noWebSearch = !settings.webSearch;
+  if (typeof settings.subagent === "boolean") c.noSubagent = !settings.subagent;
+  if (typeof settings.skills === "boolean") c.noSkills = !settings.skills;
+  if (typeof settings.memory === "boolean") c.noMemory = !settings.memory;
+  if (typeof settings.permissions === "boolean") c.noPermissions = !settings.permissions;
+  if (typeof settings.transcript === "boolean") c.transcript = settings.transcript;
+  if (settings.transcriptDir) c.transcriptDir = settings.transcriptDir;
+  if (typeof settings.showUsage === "boolean") c.showUsage = settings.showUsage;
+  if (typeof settings.statusLine === "boolean") c.noStatusLine = !settings.statusLine;
+  if (typeof settings.markdown === "boolean") c.noMarkdown = !settings.markdown;
+  if (settings.systemExtra) c.systemExtra = settings.systemExtra;
+  return c;
+}
+
 const VALID_EFFORTS: Config["effort"][] = ["low", "medium", "high", "xhigh", "max"];
 
-export function parseArgs(argv: string[]): Config {
-  const config: Config = { ...DEFAULTS };
+export function parseArgs(argv: string[], base?: Config): Config {
+  const config: Config = base ? { ...base } : { ...DEFAULTS };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const next = (label: string): string => {
@@ -96,7 +129,24 @@ export function parseArgs(argv: string[]): Config {
         config.compact = false;
         break;
       case "--resume":
-        config.resume = next("--resume");
+        if (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+          config.resume = next("--resume");
+        } else {
+          config.resumeLast = true;
+        }
+        break;
+      case "--print":
+      case "-p":
+        config.printMessage = next("--print");
+        break;
+      case "--no-status-line":
+        config.noStatusLine = true;
+        break;
+      case "--no-markdown":
+        config.noMarkdown = true;
+        break;
+      case "--no-hooks":
+        config.noHooks = true;
         break;
       case "--no-web-search":
         config.noWebSearch = true;
@@ -140,11 +190,15 @@ Options:
   --no-skills             Don't load .arnie/skills/*
   --no-memory             Don't load .arnie/memory.md
   --no-permissions        Ignore .arnie/permissions.json
+  --no-hooks              Ignore .arnie/hooks.json
+  --no-status-line        Don't render the status line
+  --no-markdown           Don't render markdown (raw output)
   --no-transcript         Don't write a session transcript
   --transcript-dir <dir>  Directory for transcripts (default: ~/.arnie/transcripts)
   --no-usage              Don't display per-turn usage
   --system-extra <text>   Append text to the system prompt
-  --resume <name>         Resume a saved session by name
+  --resume [name]         Resume a saved session (most recent if no name)
+  -p, --print <msg>       Run a single non-interactive turn and exit
   --init                  Scaffold .arnie/ directory in current cwd and exit
   --version               Print version and exit
   -h, --help              Show this help and exit

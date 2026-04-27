@@ -56,6 +56,12 @@ export interface SessionInfo {
   bytes: number;
 }
 
+export async function loadLastSession(): Promise<SavedSession | null> {
+  const all = await listSessions();
+  if (all.length === 0) return null;
+  return loadSession(all[0].name);
+}
+
 export async function listSessions(): Promise<SessionInfo[]> {
   const dir = sessionsDir();
   try {
