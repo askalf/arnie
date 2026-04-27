@@ -229,6 +229,36 @@ Set `"defaults": false` to use only your custom rules. Patterns are JS regexes.
 
 `~/.arnie/persona.md` (or `.arnie/persona.md` per project) appends to the system prompt. Use this to flavor or specialize arnie — e.g., make it a database admin assistant for one project, a Windows-server SME for another.
 
+### Sandbox
+
+`.arnie/sandbox.json` constrains which paths the file tools can touch. Empty or missing config = no restrictions.
+
+```json
+{
+  "allowed_read_paths": ["~/projects/foo", "/var/log"],
+  "allowed_write_paths": ["~/projects/foo"]
+}
+```
+
+`read_file`, `list_dir`, `write_file`, and `edit_file` all consult this. Paths outside the allowed dirs return a `sandbox denied` error to the model so it can adapt.
+
+### Cost budget
+
+`--budget 5.00` halts the session when the running cost exceeds $5.00. Useful for unattended runs.
+
+### Auto-checkpoint
+
+`--auto-checkpoint 10` saves the session every 10 user turns under a name like `checkpoint-2026-04-27T21-25-13`. Resume the most recent with `arnie --resume`.
+
+### Background-job notifications
+
+When a `shell_background` job finishes between turns, the next user message is automatically prefixed with a `<system-reminder>` listing the finished jobs (id, command, exit code, elapsed). The model can then call `shell_status` to read the output.
+
+### Replay & feedback
+
+- `/replay <transcript.jsonl>` reconstructs the conversation from a transcript file (handy for resuming a debugging session that wasn't `/save`d).
+- `/feedback "note"` appends a dated note to `~/.arnie/feedback.md`. On the next session start, that file's contents get loaded into the system prompt — durable lessons across runs. `/feedback --clear` empties it.
+
 ### Spillover output
 
 When a shell command produces more than 100KB of output, the truncated portion goes to disk under the OS temp dir, and the path is returned in `stdout_full_path`/`stderr_full_path`. The model can read it back via `read_file` to inspect specific portions without flooding the context.

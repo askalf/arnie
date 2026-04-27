@@ -35,6 +35,24 @@ interface Job {
 
 const jobs = new Map<string, Job>();
 let nextId = 1;
+const announcedDone = new Set<string>();
+
+export function getUnannouncedFinishedJobs(): { id: string; command: string; exit_code: number | null; elapsed_ms: number; killed: boolean }[] {
+  const out: { id: string; command: string; exit_code: number | null; elapsed_ms: number; killed: boolean }[] = [];
+  for (const job of jobs.values()) {
+    if (job.doneAt !== null && !announcedDone.has(job.id)) {
+      announcedDone.add(job.id);
+      out.push({
+        id: job.id,
+        command: job.command,
+        exit_code: job.exitCode,
+        elapsed_ms: job.doneAt - job.startedAt,
+        killed: job.killed,
+      });
+    }
+  }
+  return out;
+}
 
 export interface ShellBgInput {
   command: string;

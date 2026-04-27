@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
 import { log } from "../log.js";
+import { checkRead } from "../sandbox.js";
 
 const MAX_ENTRIES = 500;
 
@@ -28,6 +29,12 @@ export async function runListDir(input: ListDirInput): Promise<ListDirResult> {
   const resolved = path.resolve(input.path);
   log();
   log(chalk.cyan("ls ") + chalk.white(resolved));
+
+  const sb = checkRead(resolved);
+  if (!sb.allowed) {
+    log(chalk.red(`  ✕ sandbox: ${sb.reason}`));
+    return { ok: false, path: resolved, error: `sandbox denied: ${sb.reason}` };
+  }
 
   try {
     const stat = await fs.stat(resolved);

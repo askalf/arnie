@@ -23,9 +23,80 @@ export interface ParsedInput {
 const ATTACH_RE = /^attach\s+(.+)$/im;
 const ATTACH_BLOCK_RE = /^attach\s+(.+)$/gim;
 // @ references: matches @path tokens. Path can contain letters, digits, slash,
-// backslash, dot, dash, underscore, colon (for Windows drive letters).
-// Doesn't match emails (@something@host) — requires a non-@ char before.
-const AT_REF_RE = /(^|\s)@([A-Za-z]:[\\/][^\s@]*|[\w./\\-][\w./\\:-]*)/g;
+// backslash, dot, dash, underscore, colon (Windows drive letters), and *,?,[
+// for glob patterns. Doesn't match emails — requires a non-@ char before.
+const AT_REF_RE = /(^|\s)@([A-Za-z]:[\\/][^\s@]*|[\w./\\*?[\]-][\w./\\:*?[\]-]*)/g;
+const MAX_GLOB_MATCHES = 50;
+
+function isGlob(s: string): boolean {
+  return /[*?[]/.test(s);
+}
+
+function globToRegex(glob: string): RegExp {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i += 1;
+        if (glob[i + 1] === "/" || glob[i + 1] === "\\") i += 1;
+      } else {
+        re += "[^/\\\\]*";
+      }
+    } else if (c === "?") re += ".";
+    else if (c === ".") re += "\\.";
+    else if (c === "[" || c === "]") re += c;
+    else if ("\\/^$|+(){}".includes(c)) re += "\\" + c;
+    else re += c;
+  }
+  re += "$";
+  return new RegExp(re);
+}
+
+async function expandGlob(pattern: string): Promise<string[]> {
+  const abs = path.resolve(pattern);
+  // Find first segment with a glob char
+  const norm = abs.replace(/\\/g, "/");
+  const segs = norm.split("/");
+  let baseIdx = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (isGlob(segs[i])) {
+      baseIdx = i;
+      break;
+    }
+    baseIdx = i + 1;
+  }
+  if (baseIdx >= segs.length) return [];
+
+  const base = segs.slice(0, baseIdx).join("/") || "/";
+  const rest = segs.slice(baseIdx).join("/");
+  const re = globToRegex(rest);
+  const results: string[] = [];
+
+  async function walk(dir: string, relPrefix: string): Promise<void> {
+    if (results.length >= MAX_GLOB_MATCHES) return;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (results.length >= MAX_GLOB_MATCHES) return;
+      const full = path.join(dir, e.name);
+      const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        await walk(full, rel);
+      } else if (e.isFile()) {
+        if (re.test(rel)) results.push(full);
+      }
+    }
+  }
+
+  await walk(base, "");
+  return results;
+}
 
 export async function parseInput(rawText: string): Promise<ParsedInput> {
   const result: ParsedInput = { text: rawText, blocks: [], attachments: [], errors: [] };
@@ -37,11 +108,21 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
     matches.push({ full: m[0], pathArg: m[1].trim() });
   }
 
-  // @file references — only attach if the resolved path actually exists as a
-  // file. Bare @words (like @ai or @username) get left alone.
+  // @file references — attach if path exists, or expand globs.
   AT_REF_RE.lastIndex = 0;
   while ((m = AT_REF_RE.exec(rawText)) !== null) {
     const pathArg = m[2];
+    if (isGlob(pathArg)) {
+      const expanded = await expandGlob(pathArg);
+      if (expanded.length > 0) {
+        for (const f of expanded) {
+          matches.push({ full: `@${pathArg}`, pathArg: f });
+        }
+      } else {
+        result.errors.push(`@${pathArg}: no files matched glob`);
+      }
+      continue;
+    }
     const resolved = path.resolve(pathArg);
     try {
       const stat = await fs.stat(resolved);

@@ -73,3 +73,18 @@ export function formatSessionTotals(totals: UsageTotals): string {
   ];
   return lines.join("\n");
 }
+
+export function deltaTotals(curr: UsageTotals, baseline: UsageTotals): UsageTotals {
+  return {
+    inputTokens: curr.inputTokens - baseline.inputTokens,
+    outputTokens: curr.outputTokens - baseline.outputTokens,
+    cacheCreationTokens: curr.cacheCreationTokens - baseline.cacheCreationTokens,
+    cacheReadTokens: curr.cacheReadTokens - baseline.cacheReadTokens,
+    costUsd: curr.costUsd - baseline.costUsd,
+    turns: curr.turns - baseline.turns,
+  };
+}
+
+export function snapshotTotals(t: UsageTotals): UsageTotals {
+  return { ...t };
+}

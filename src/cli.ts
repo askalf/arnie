@@ -35,8 +35,12 @@ import { setQuiet } from "./log.js";
 import { loadRedactors, setRedactors, describeRedactors } from "./redactors.js";
 import { describeModel } from "./profile.js";
 import { loadPersonaOverride } from "./persona.js";
+import { loadSandbox, setSandbox, describeSandbox } from "./sandbox.js";
+import { getUnannouncedFinishedJobs } from "./tools/backgroundShell.js";
+import { appendFeedback, loadFeedback, clearFeedback, feedbackPath } from "./feedback.js";
+import { snapshotTotals, deltaTotals } from "./usage.js";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -258,6 +262,7 @@ function handleApiError(err: unknown): string {
 interface SlashContext {
   messages: Anthropic.MessageParam[];
   totals: ReturnType<typeof emptyTotals>;
+  clearBaseline: ReturnType<typeof emptyTotals>;
   model: string;
   tools: Anthropic.ToolUnion[];
   memoryFiles: MemoryFile[];
@@ -285,11 +290,16 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
       resetToolStats();
       console.log(chalk.dim("conversation cleared"));
     }
+    Object.assign(ctx.clearBaseline, snapshotTotals(ctx.totals));
     return "continue";
   }
   if (lower === "/usage") {
     if (arg === "tools") {
       console.log(formatToolStats());
+    } else if (arg === "--since-clear") {
+      const delta = deltaTotals(ctx.totals, ctx.clearBaseline);
+      console.log(chalk.bold("usage since last /clear:"));
+      console.log(formatSessionTotals(delta));
     } else {
       console.log(formatSessionTotals(ctx.totals));
     }
@@ -509,6 +519,60 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     console.log(await describeModel(tCtx.client, tCtx.config.model));
     return "continue";
   }
+  if (lower === "/feedback") {
+    if (!arg) {
+      const text = await loadFeedback();
+      if (!text) {
+        console.log(chalk.dim(`no feedback yet (will be loaded next session from ${feedbackPath()})`));
+      } else {
+        console.log(chalk.dim(`current feedback (${feedbackPath()}):`));
+        console.log(text);
+      }
+      return "continue";
+    }
+    if (arg === "--clear") {
+      await clearFeedback();
+      console.log(chalk.dim("feedback cleared"));
+      return "continue";
+    }
+    try {
+      const file = await appendFeedback(arg);
+      console.log(chalk.dim(`appended → ${file}`));
+    } catch (err) {
+      console.error(chalk.red(`feedback failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
+  if (lower === "/replay") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /replay <transcript-jsonl-path>"));
+      return "continue";
+    }
+    try {
+      const fs = await import("node:fs/promises");
+      const raw = await fs.readFile(arg, "utf8");
+      const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+      let userMsgs = 0;
+      ctx.messages.length = 0;
+      for (const line of lines) {
+        try {
+          const rec = JSON.parse(line) as { kind?: string; content?: unknown };
+          if (rec.kind === "user" && typeof rec.content === "string") {
+            ctx.messages.push({ role: "user", content: rec.content });
+            userMsgs += 1;
+          } else if (rec.kind === "assistant" && rec.content) {
+            ctx.messages.push({ role: "assistant", content: rec.content as Anthropic.MessageParam["content"] });
+          }
+        } catch {
+          // skip bad lines
+        }
+      }
+      console.log(chalk.dim(`replayed ${userMsgs} user message(s) from ${arg} (${ctx.messages.length} total)`));
+    } catch (err) {
+      console.error(chalk.red(`replay failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
   if (lower === "/init") {
     const bootstrap = `Bootstrap a memory.md for this machine. Use shell, list_dir, network_check, and service_check to probe:
 - OS, version, architecture
@@ -694,6 +758,29 @@ async function main(): Promise<void> {
     console.error(chalk.red(`redactors load failed: ${err instanceof Error ? err.message : String(err)}`));
   }
 
+  if (!config.noSandbox) {
+    try {
+      const sandbox = await loadSandbox();
+      setSandbox(sandbox);
+      if (sandbox.source) {
+        console.log(chalk.dim(`sandbox: ${describeSandbox()}`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`sandbox load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
+  // Pre-load any feedback from previous session and inject as a system block
+  try {
+    const fb = await loadFeedback();
+    if (fb && !config.noMemory) {
+      baseSystemBlocks = appendMemoryBlock(baseSystemBlocks, `Feedback from prior sessions (loaded from ${feedbackPath()}):\n\n${fb}`);
+      console.log(chalk.dim(`feedback: ${feedbackPath()}`));
+    }
+  } catch (err) {
+    console.error(chalk.red(`feedback load failed: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
   let mcpConfig: McpConfig = { servers: [], source: null };
   if (!config.noMcp) {
     try {
@@ -729,7 +816,9 @@ async function main(): Promise<void> {
   }
 
   const totals = emptyTotals();
+  const clearBaseline = emptyTotals();
   const planMode = { current: false };
+  let userTurnsSinceCheckpoint = 0;
 
   const transcript = createTranscriptWriter({
     enabled: config.transcript,
@@ -784,6 +873,7 @@ async function main(): Promise<void> {
   const slashCtx: SlashContext = {
     messages,
     totals,
+    clearBaseline,
     model: config.model,
     tools,
     memoryFiles,
@@ -839,15 +929,55 @@ async function main(): Promise<void> {
         console.log(chalk.dim(`  attached ${a.type}: ${a.path} (${a.bytes} bytes)`));
       }
     }
-    await transcript.appendUser(line);
-    if (parsed.blocks.length === 1 && parsed.blocks[0].type === "text") {
-      messages.push({ role: "user", content: line });
+
+    // Inject system reminders for any background jobs that finished since
+    // the last user turn — the model would otherwise be unaware.
+    const finishedJobs = getUnannouncedFinishedJobs();
+    let userContent: Anthropic.MessageParam["content"];
+    let userTextForTranscript = line;
+    if (finishedJobs.length > 0) {
+      const reminder = `<system-reminder>\n${finishedJobs.length} background job${finishedJobs.length === 1 ? "" : "s"} finished since the last turn:\n${finishedJobs
+        .map((j) => `- ${j.id}: \`${j.command}\` exit=${j.exit_code ?? (j.killed ? "killed" : "?")} elapsed=${j.elapsed_ms}ms`)
+        .join("\n")}\nUse shell_status with the job_id to read the output if relevant.\n</system-reminder>\n\n`;
+      userTextForTranscript = reminder + line;
+      if (parsed.blocks.length === 1 && parsed.blocks[0].type === "text") {
+        userContent = reminder + line;
+      } else {
+        userContent = [{ type: "text", text: reminder } as Anthropic.TextBlockParam, ...parsed.blocks];
+      }
     } else {
-      messages.push({ role: "user", content: parsed.blocks });
+      if (parsed.blocks.length === 1 && parsed.blocks[0].type === "text") {
+        userContent = line;
+      } else {
+        userContent = parsed.blocks;
+      }
     }
+
+    await transcript.appendUser(userTextForTranscript);
+    messages.push({ role: "user", content: userContent });
 
     await runTurn(ctx, messages);
     process.stdout.write("\n");
+
+    // Budget enforcement
+    if (config.budgetUsd && totals.costUsd >= config.budgetUsd) {
+      console.log(chalk.yellow(`\nbudget exceeded: $${totals.costUsd.toFixed(4)} ≥ $${config.budgetUsd.toFixed(4)} — exiting`));
+      break;
+    }
+
+    // Auto-checkpoint
+    if (config.autoCheckpoint) {
+      userTurnsSinceCheckpoint += 1;
+      if (userTurnsSinceCheckpoint >= config.autoCheckpoint) {
+        try {
+          const file = await saveSession(`checkpoint-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}`, config.model, messages);
+          console.log(chalk.dim(`auto-checkpoint → ${file}`));
+        } catch (err) {
+          console.error(chalk.red(`checkpoint failed: ${err instanceof Error ? err.message : String(err)}`));
+        }
+        userTurnsSinceCheckpoint = 0;
+      }
+    }
   }
 
   await shutdown(transcript, totals);

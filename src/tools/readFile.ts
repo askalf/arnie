@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
 import { log } from "../log.js";
+import { checkRead } from "../sandbox.js";
 
 const MAX_FILE_BYTES = 200_000;
 
@@ -24,6 +25,12 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
   const resolved = path.resolve(input.path);
   log();
   log(chalk.cyan("read ") + chalk.white(resolved));
+
+  const sb = checkRead(resolved);
+  if (!sb.allowed) {
+    log(chalk.red(`  ✕ sandbox: ${sb.reason}`));
+    return { ok: false, path: resolved, bytes: 0, error: `sandbox denied: ${sb.reason}` };
+  }
 
   try {
     const stat = await fs.stat(resolved);

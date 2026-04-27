@@ -1116,6 +1116,185 @@ async function personaTests(): Promise<void> {
   await fs.unlink(personaFile).catch(() => {});
 }
 
+async function sandboxTests(): Promise<void> {
+  const { setSandbox, checkRead, checkWrite } = await import("./sandbox.js");
+  const { runReadFile } = await import("./tools/readFile.js");
+  const { runWriteFile } = await import("./tools/writeFile.js");
+
+  const allowedDir = path.join(os.tmpdir(), `arnie-sandbox-allow-${Date.now()}`);
+  const deniedDir = path.join(os.tmpdir(), `arnie-sandbox-deny-${Date.now()}`);
+  await fs.mkdir(allowedDir, { recursive: true });
+  await fs.mkdir(deniedDir, { recursive: true });
+  const allowedFile = path.join(allowedDir, "ok.txt");
+  const deniedFile = path.join(deniedDir, "nope.txt");
+  await fs.writeFile(allowedFile, "ok content", "utf8");
+  await fs.writeFile(deniedFile, "denied content", "utf8");
+
+  setSandbox({ allowed_read_paths: [allowedDir], allowed_write_paths: [allowedDir], source: "test" });
+
+  const allow = checkRead(allowedFile);
+  cases.push({
+    name: "sandbox: allowed path passes checkRead",
+    pass: allow.allowed === true,
+    detail: "ok",
+  });
+
+  const deny = checkRead(deniedFile);
+  cases.push({
+    name: "sandbox: outside path fails checkRead",
+    pass: deny.allowed === false && deny.reason !== undefined,
+    detail: deny.reason ?? "expected reason",
+  });
+
+  const writeOk = checkWrite(path.join(allowedDir, "new.txt"));
+  cases.push({
+    name: "sandbox: allowed path passes checkWrite",
+    pass: writeOk.allowed === true,
+    detail: "ok",
+  });
+
+  // shell tool integration
+  const r1 = await runReadFile({ path: deniedFile });
+  cases.push({
+    name: "sandbox: read_file denies outside path",
+    pass: !r1.ok && r1.error !== undefined && r1.error.includes("sandbox denied"),
+    detail: r1.error ?? "expected denial",
+  });
+
+  const r2 = await runReadFile({ path: allowedFile });
+  cases.push({
+    name: "sandbox: read_file allows inside path",
+    pass: r2.ok === true && r2.content?.includes("ok content"),
+    detail: r2.ok ? "ok" : `error: ${r2.error}`,
+  });
+
+  // write outside is denied (no confirm needed since denial returns early)
+  const r3 = await runWriteFile({ path: path.join(deniedDir, "new.txt"), content: "x" });
+  cases.push({
+    name: "sandbox: write_file denies outside path",
+    pass: !r3.ok && r3.error !== undefined && r3.error.includes("sandbox denied"),
+    detail: r3.error ?? "expected denial",
+  });
+
+  setSandbox({ allowed_read_paths: [], allowed_write_paths: [], source: null });
+  await fs.rm(allowedDir, { recursive: true, force: true });
+  await fs.rm(deniedDir, { recursive: true, force: true });
+}
+
+async function atGlobTests(): Promise<void> {
+  const { parseInput } = await import("./attach.js");
+  const tmpDir = path.join(os.tmpdir(), `arnie-glob-${Date.now()}`);
+  await fs.mkdir(path.join(tmpDir, "sub"), { recursive: true });
+  await fs.writeFile(path.join(tmpDir, "a.log"), "alpha", "utf8");
+  await fs.writeFile(path.join(tmpDir, "b.log"), "beta", "utf8");
+  await fs.writeFile(path.join(tmpDir, "c.txt"), "gamma", "utf8");
+  await fs.writeFile(path.join(tmpDir, "sub", "d.log"), "delta", "utf8");
+
+  const r1 = await parseInput(`look at @${tmpDir}/*.log`);
+  cases.push({
+    name: "@glob: matches *.log in dir (excludes subdir)",
+    pass: r1.attachments.length === 2 && r1.attachments.every((a) => a.path.endsWith(".log")),
+    detail: `${r1.attachments.length} matched`,
+  });
+
+  const r2 = await parseInput(`look at @${tmpDir}/**/*.log`);
+  cases.push({
+    name: "@glob: ** matches recursively",
+    pass: r2.attachments.length === 3,
+    detail: `${r2.attachments.length} matched`,
+  });
+
+  const r3 = await parseInput(`look at @${tmpDir}/*.xyz`);
+  cases.push({
+    name: "@glob: empty match returns error",
+    pass: r3.attachments.length === 0 && r3.errors.length === 1,
+    detail: r3.errors[0] ?? "expected error",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
+async function feedbackTests(): Promise<void> {
+  const { appendFeedback, loadFeedback, clearFeedback } = await import("./feedback.js");
+  await clearFeedback();
+
+  const empty = await loadFeedback();
+  cases.push({
+    name: "feedback: empty when none written",
+    pass: empty === null,
+    detail: empty ? "got data" : "null",
+  });
+
+  await appendFeedback("Always check the spooler first on this server.");
+  await appendFeedback("DC at 10.0.0.5 frequently returns slow auth.");
+  const text = await loadFeedback();
+  cases.push({
+    name: "feedback: appends and loads multiple notes",
+    pass: text !== null && text.includes("spooler") && text.includes("DC at 10.0.0.5"),
+    detail: text ? `${text.length} chars` : "null",
+  });
+
+  await clearFeedback();
+  const after = await loadFeedback();
+  cases.push({
+    name: "feedback: clear removes the file",
+    pass: after === null,
+    detail: after ? "still there" : "ok",
+  });
+}
+
+function budgetTests(): void {
+  let bad: unknown = null;
+  try {
+    parseArgs(["--budget", "abc"]);
+  } catch (err) {
+    bad = err;
+  }
+  cases.push({
+    name: "budget: rejects non-numeric value",
+    pass: bad instanceof Error && bad.message.includes("--budget must be a positive number"),
+    detail: "ok",
+  });
+
+  const good = parseArgs(["--budget", "0.50"]);
+  cases.push({
+    name: "budget: parses dollar value",
+    pass: good.budgetUsd === 0.5,
+    detail: `budgetUsd=${good.budgetUsd}`,
+  });
+
+  const ckpt = parseArgs(["--auto-checkpoint", "5"]);
+  cases.push({
+    name: "auto-checkpoint: parses turn count",
+    pass: ckpt.autoCheckpoint === 5,
+    detail: `n=${ckpt.autoCheckpoint}`,
+  });
+}
+
+async function jobNotificationTests(): Promise<void> {
+  const { runShellBackground, getUnannouncedFinishedJobs } = await import("./tools/backgroundShell.js");
+  const isWindows = process.platform === "win32";
+  const fast = await runShellBackground({
+    command: isWindows ? "Write-Output 'notif-test-done'" : "echo notif-test-done",
+    reason: "test notif",
+  });
+  await new Promise((r) => setTimeout(r, 800));
+
+  const finished = getUnannouncedFinishedJobs();
+  cases.push({
+    name: "notif: getUnannouncedFinishedJobs returns finished",
+    pass: finished.some((j) => j.id === fast.job_id),
+    detail: `${finished.length} just-finished`,
+  });
+
+  const finishedAgain = getUnannouncedFinishedJobs();
+  cases.push({
+    name: "notif: doesn't re-announce same job",
+    pass: !finishedAgain.some((j) => j.id === fast.job_id),
+    detail: `${finishedAgain.length} after re-poll`,
+  });
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -1147,6 +1326,11 @@ async function main(): Promise<void> {
   await redactorsTests();
   await spilloverTests();
   await personaTests();
+  await sandboxTests();
+  await atGlobTests();
+  await feedbackTests();
+  budgetTests();
+  await jobNotificationTests();
 
   console.log();
   console.log("=".repeat(70));

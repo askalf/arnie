@@ -22,6 +22,9 @@ export interface Config {
   noStatusLine: boolean;
   noMarkdown: boolean;
   noMcp: boolean;
+  noSandbox: boolean;
+  budgetUsd?: number;
+  autoCheckpoint?: number;
   quiet: boolean;
   voice: boolean;
   init: boolean;
@@ -49,6 +52,7 @@ const DEFAULTS: Config = {
   noStatusLine: false,
   noMarkdown: false,
   noMcp: false,
+  noSandbox: false,
   quiet: false,
   voice: false,
   init: false,
@@ -164,6 +168,25 @@ export function parseArgs(argv: string[], base?: Config): Config {
       case "--voice":
         config.voice = true;
         break;
+      case "--no-sandbox":
+        config.noSandbox = true;
+        break;
+      case "--budget": {
+        const v = parseFloat(next("--budget"));
+        if (!Number.isFinite(v) || v <= 0) {
+          throw new Error("--budget must be a positive number (USD)");
+        }
+        config.budgetUsd = v;
+        break;
+      }
+      case "--auto-checkpoint": {
+        const v = parseInt(next("--auto-checkpoint"), 10);
+        if (!Number.isFinite(v) || v <= 0) {
+          throw new Error("--auto-checkpoint must be a positive integer (turns)");
+        }
+        config.autoCheckpoint = v;
+        break;
+      }
       case "--no-web-search":
         config.noWebSearch = true;
         break;
@@ -212,6 +235,9 @@ Options:
   --no-markdown           Don't render markdown (raw output)
   -q, --quiet             Suppress tool execution chatter; only show responses
   --voice                 Speak assistant responses (espeak/say/PowerShell SAPI)
+  --no-sandbox            Ignore .arnie/sandbox.json path restrictions
+  --budget <usd>          Halt the session after exceeding $N in tokens
+  --auto-checkpoint <n>   Auto-save the session every N user turns
   --no-transcript         Don't write a session transcript
   --transcript-dir <dir>  Directory for transcripts (default: ~/.arnie/transcripts)
   --no-usage              Don't display per-turn usage

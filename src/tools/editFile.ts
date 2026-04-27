@@ -3,6 +3,7 @@ import path from "node:path";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
 import { log } from "../log.js";
+import { checkWrite, checkRead } from "../sandbox.js";
 
 const MAX_PREVIEW_LINES = 12;
 
@@ -78,6 +79,17 @@ export async function runEditFile(input: EditFileInput): Promise<EditFileResult>
 
   if (input.old_string === input.new_string) {
     return { ok: false, path: resolved, error: "old_string and new_string are identical." };
+  }
+
+  const r = checkRead(resolved);
+  if (!r.allowed) {
+    log(chalk.red(`  ✕ sandbox (read): ${r.reason}`));
+    return { ok: false, path: resolved, error: `sandbox denied: ${r.reason}` };
+  }
+  const w = checkWrite(resolved);
+  if (!w.allowed) {
+    log(chalk.red(`  ✕ sandbox (write): ${w.reason}`));
+    return { ok: false, path: resolved, error: `sandbox denied: ${w.reason}` };
   }
 
   let original: string;

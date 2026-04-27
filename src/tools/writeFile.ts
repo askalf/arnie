@@ -3,6 +3,7 @@ import path from "node:path";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
 import { log } from "../log.js";
+import { checkWrite } from "../sandbox.js";
 
 const MAX_PREVIEW = 800;
 
@@ -33,6 +34,12 @@ export async function runWriteFile(input: WriteFileInput): Promise<WriteFileResu
   log();
   log(chalk.cyan("write ") + chalk.white(resolved) + chalk.dim(` (${input.content.length} bytes, mode=${mode})`));
   if (input.reason) log(chalk.dim(`  reason: ${input.reason}`));
+
+  const sb = checkWrite(resolved);
+  if (!sb.allowed) {
+    log(chalk.red(`  ✕ sandbox: ${sb.reason}`));
+    return { ok: false, path: resolved, error: `sandbox denied: ${sb.reason}` };
+  }
 
   let exists = false;
   try {
