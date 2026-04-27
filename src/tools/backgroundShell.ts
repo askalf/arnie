@@ -3,6 +3,7 @@ import process from "node:process";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
 import { log } from "../log.js";
+import { redact } from "../redactors.js";
 
 const MAX_OUTPUT_BYTES = 200_000;
 
@@ -152,13 +153,15 @@ export interface ShellStatusResult {
 }
 
 function snapshotOutput(job: Job, maxChars: number): { out: string; err: string; outTrunc: boolean; errTrunc: boolean } {
-  const o = Buffer.concat(job.stdoutChunks, job.stdoutBytes).toString("utf8");
-  const e = Buffer.concat(job.stderrChunks, job.stderrBytes).toString("utf8");
+  const oRaw = Buffer.concat(job.stdoutChunks, job.stdoutBytes).toString("utf8");
+  const eRaw = Buffer.concat(job.stderrChunks, job.stderrBytes).toString("utf8");
+  const oSlice = oRaw.length > maxChars ? oRaw.slice(oRaw.length - maxChars) : oRaw;
+  const eSlice = eRaw.length > maxChars ? eRaw.slice(eRaw.length - maxChars) : eRaw;
   return {
-    out: o.length > maxChars ? o.slice(o.length - maxChars) : o,
-    err: e.length > maxChars ? e.slice(e.length - maxChars) : e,
-    outTrunc: o.length > maxChars || job.stdoutBytes >= MAX_OUTPUT_BYTES,
-    errTrunc: e.length > maxChars || job.stderrBytes >= MAX_OUTPUT_BYTES,
+    out: redact(oSlice).redacted,
+    err: redact(eSlice).redacted,
+    outTrunc: oRaw.length > maxChars || job.stdoutBytes >= MAX_OUTPUT_BYTES,
+    errTrunc: eRaw.length > maxChars || job.stderrBytes >= MAX_OUTPUT_BYTES,
   };
 }
 

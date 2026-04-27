@@ -32,8 +32,11 @@ import { bufferDelta, flushSpeech, clearSpeechBuffer } from "./voice.js";
 import { formatToolStats, resetToolStats } from "./toolStats.js";
 import { writeSettings, loadSettings as loadSettingsFile } from "./settings.js";
 import { setQuiet } from "./log.js";
+import { loadRedactors, setRedactors, describeRedactors } from "./redactors.js";
+import { describeModel } from "./profile.js";
+import { loadPersonaOverride } from "./persona.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -45,9 +48,12 @@ ${chalk.dim("type")} ${chalk.white("/help")} ${chalk.dim("for commands,")} ${cha
 const REPL_HELP = `${chalk.bold("Slash commands:")}
   ${chalk.white("/help")}            this help
   ${chalk.white("/usage")}           session token totals and estimated cost
+  ${chalk.white("/usage tools")}     per-tool call counts and durations
   ${chalk.white("/clear")}           reset the conversation
+  ${chalk.white("/clear --summary")} summarize then reset
   ${chalk.white("/tools")}           list registered tools
   ${chalk.white("/jobs")}            list background shell jobs
+  ${chalk.white("/jobs --watch")}    block until all background jobs finish
   ${chalk.white("/skills")}          list discovered skills
   ${chalk.white("/memory")}          show loaded memory files
   ${chalk.white("/remember <fact>")} append a line to .arnie/memory.md
@@ -55,12 +61,17 @@ const REPL_HELP = `${chalk.bold("Slash commands:")}
   ${chalk.white("/save <name>")}     save the current conversation
   ${chalk.white("/load <name>")}     load a saved conversation
   ${chalk.white("/list")}            list saved sessions
+  ${chalk.white("/find <query>")}    search across saved sessions
   ${chalk.white("/export <name>")}   export current conversation as markdown
   ${chalk.white("/plan")}            toggle plan mode
+  ${chalk.white("/profile")}         show model details (capabilities, context window)
+  ${chalk.white("/init")}            ask the model to bootstrap memory.md from machine probes
+  ${chalk.white("/settings")}        view current settings
   ${chalk.white("/exit")}            quit (or Ctrl+C twice)
 ${chalk.bold("Input:")}
-  Type a message and press Enter. Use ${chalk.white(`"""`)} on its own line to start
-  and end multi-line mode (paste logs, stack traces, etc.).
+  Plain text. Use ${chalk.white(`"""`)} on its own line for multi-line input.
+  ${chalk.white("@path/to/file")} auto-attaches a file (image or text).
+  ${chalk.white("attach <path>")} also attaches; multi-occurrence supported.
 ${chalk.bold("Tools available to the model:")}
   ${chalk.white("shell, shell_background, shell_status, shell_kill")}
   ${chalk.white("read_file, write_file, edit_file, list_dir, grep")}
@@ -493,6 +504,25 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     }
     return "continue";
   }
+  if (lower === "/profile") {
+    const tCtx = ctx.turnCtx;
+    console.log(await describeModel(tCtx.client, tCtx.config.model));
+    return "continue";
+  }
+  if (lower === "/init") {
+    const bootstrap = `Bootstrap a memory.md for this machine. Use shell, list_dir, network_check, and service_check to probe:
+- OS, version, architecture
+- Hostname and primary network adapter info
+- Whether common services (DNS, network) are reachable
+- Notable installed software you can quickly detect (Docker, Node, Python, package managers)
+- The contents and structure of the current working directory (basic shape only)
+
+Then propose a concise memory.md with stable, factual context (no temporary state, no tool output dumps). Save it via write_file to .arnie/memory.md (the user will confirm). Keep the file under 60 lines.`;
+    ctx.messages.push({ role: "user", content: bootstrap });
+    await runTurn(ctx.turnCtx, ctx.messages);
+    process.stdout.write("\n");
+    return "continue";
+  }
   return null;
 }
 
@@ -605,7 +635,22 @@ async function main(): Promise<void> {
   setQuiet(config.quiet);
 
   const client = new Anthropic({ maxRetries: 3 });
-  let baseSystemBlocks = buildSystemBlocks(config.systemExtra);
+
+  let personaText: string | undefined = config.systemExtra;
+  if (!config.noMemory) {
+    try {
+      const persona = await loadPersonaOverride();
+      if (persona) {
+        const tag = `Persona override (loaded from ${persona.source}):\n${persona.text}`;
+        personaText = personaText ? `${personaText}\n\n${tag}` : tag;
+        console.log(chalk.dim(`persona: ${persona.source}`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`persona load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
+  let baseSystemBlocks = buildSystemBlocks(personaText);
 
   const memoryFiles = config.noMemory ? [] : await loadMemoryFiles();
   if (memoryFiles.length > 0) {
@@ -639,6 +684,14 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(chalk.red(`hooks load failed: ${err instanceof Error ? err.message : String(err)}`));
     }
+  }
+
+  try {
+    const redactors = await loadRedactors();
+    setRedactors(redactors);
+    console.log(chalk.dim(`redactors: ${describeRedactors()}`));
+  } catch (err) {
+    console.error(chalk.red(`redactors load failed: ${err instanceof Error ? err.message : String(err)}`));
   }
 
   let mcpConfig: McpConfig = { servers: [], source: null };

@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs/promises";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
 import { evaluateCommand, type PermissionsConfig } from "../permissions.js";
 import { log } from "../log.js";
+import { redact } from "../redactors.js";
 
 let permissions: PermissionsConfig = { allow: [], deny: [], source: null };
 
@@ -12,7 +16,16 @@ export function setShellPermissions(config: PermissionsConfig): void {
 }
 
 const MAX_OUTPUT_BYTES = 50_000;
+const SPILLOVER_THRESHOLD_BYTES = 100_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+async function spillover(name: string, content: string): Promise<string> {
+  const dir = path.join(os.tmpdir(), "arnie-spillover");
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${Date.now()}-${name}.log`);
+  await fs.writeFile(file, content, "utf8");
+  return file;
+}
 
 const DESTRUCTIVE_PATTERNS: { pattern: RegExp; reason: string }[] = [
   { pattern: /\brm\b\s+(?:-[a-zA-Z]*[rRfF][a-zA-Z]*\s+|-[a-zA-Z]+\s+)*/, reason: "rm with recursive/force flags" },
@@ -60,6 +73,8 @@ export interface ShellResult {
   stderr: string;
   truncated: boolean;
   cancelled?: boolean;
+  stdout_full_path?: string;
+  stderr_full_path?: string;
 }
 
 function looksDestructive(command: string): string | null {
@@ -163,19 +178,48 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      const stdoutBuf = Buffer.concat(stdoutChunks, stdoutBytes);
-      const stderrBuf = Buffer.concat(stderrChunks, stderrBytes);
-      const out = truncateOutput(stdoutBuf);
-      const err = truncateOutput(stderrBuf);
-      const summary = `exit ${code ?? "killed"}`;
-      log(chalk.dim(`  ${summary}`));
-      resolve({
-        ok: code === 0,
-        exit_code: code,
-        stdout: out.text,
-        stderr: err.text,
-        truncated: out.truncated || err.truncated,
-      });
+      void (async () => {
+        const stdoutBuf = Buffer.concat(stdoutChunks, stdoutBytes);
+        const stderrBuf = Buffer.concat(stderrChunks, stderrBytes);
+        const out = truncateOutput(stdoutBuf);
+        const err = truncateOutput(stderrBuf);
+        const summary = `exit ${code ?? "killed"}`;
+        log(chalk.dim(`  ${summary}`));
+        const redactedOut = redact(out.text);
+        const redactedErr = redact(err.text);
+        if (redactedOut.hits + redactedErr.hits > 0) {
+          log(chalk.dim(`  ${redactedOut.hits + redactedErr.hits} secret(s) redacted from output`));
+        }
+
+        let stdoutFullPath: string | undefined;
+        let stderrFullPath: string | undefined;
+        if (stdoutBuf.length > SPILLOVER_THRESHOLD_BYTES) {
+          try {
+            stdoutFullPath = await spillover("stdout", redact(stdoutBuf.toString("utf8")).redacted);
+            log(chalk.dim(`  stdout spillover: ${stdoutFullPath}`));
+          } catch {
+            // best-effort
+          }
+        }
+        if (stderrBuf.length > SPILLOVER_THRESHOLD_BYTES) {
+          try {
+            stderrFullPath = await spillover("stderr", redact(stderrBuf.toString("utf8")).redacted);
+            log(chalk.dim(`  stderr spillover: ${stderrFullPath}`));
+          } catch {
+            // best-effort
+          }
+        }
+
+        resolve({
+          ok: code === 0,
+          exit_code: code,
+          stdout: redactedOut.redacted,
+          stderr: redactedErr.redacted,
+          truncated: out.truncated || err.truncated,
+          stdout_full_path: stdoutFullPath,
+          stderr_full_path: stderrFullPath,
+        });
+      })();
     });
   });
 }

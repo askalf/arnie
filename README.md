@@ -197,12 +197,41 @@ Servers are passed through to the API's `mcp_servers` parameter; tool discovery,
 
 ### Image and file attachments
 
-Inside a user message, `attach <path>` pulls a file (or image) into the message as a content block. Supported images: jpg/png/gif/webp (max 8MB). Other files are read as text (max 200KB).
+Inside a user message, you can attach files two ways:
+
+- `@path/to/file` — bare-token reference, like Claude Code. Auto-attaches if the file exists.
+- `attach <path>` — explicit form, useful if the path contains spaces or unusual characters.
+
+Supported images: jpg/png/gif/webp (max 8MB). Other files are read as text (max 200KB).
 
 ```
-you> attach C:\Users\me\Desktop\error.png
-... what's this dialog box telling me?
+you> what's this dialog box telling me? @C:\Users\me\Desktop\error.png
+you> review @src/auth.ts and look for issues
 ```
+
+### Output redactors
+
+Secrets in shell output get scrubbed before the model ever sees them. Defaults catch Anthropic API keys, AWS keys, GitHub PATs, Bearer tokens, password/api_key assignments. Add your own in `~/.arnie/redactors.json`:
+
+```json
+{
+  "defaults": true,
+  "rules": [
+    { "pattern": "internal-prod-token-[A-Z0-9]+", "replacement": "[REDACTED:internal]" },
+    { "pattern": "(?i)pin\\s*[:=]\\s*\\d+", "replacement": "pin=[REDACTED]" }
+  ]
+}
+```
+
+Set `"defaults": false` to use only your custom rules. Patterns are JS regexes.
+
+### Persona override
+
+`~/.arnie/persona.md` (or `.arnie/persona.md` per project) appends to the system prompt. Use this to flavor or specialize arnie — e.g., make it a database admin assistant for one project, a Windows-server SME for another.
+
+### Spillover output
+
+When a shell command produces more than 100KB of output, the truncated portion goes to disk under the OS temp dir, and the path is returned in `stdout_full_path`/`stderr_full_path`. The model can read it back via `read_file` to inspect specific portions without flooding the context.
 
 ### Hooks
 

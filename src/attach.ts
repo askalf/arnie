@@ -22,6 +22,10 @@ export interface ParsedInput {
 
 const ATTACH_RE = /^attach\s+(.+)$/im;
 const ATTACH_BLOCK_RE = /^attach\s+(.+)$/gim;
+// @ references: matches @path tokens. Path can contain letters, digits, slash,
+// backslash, dot, dash, underscore, colon (for Windows drive letters).
+// Doesn't match emails (@something@host) — requires a non-@ char before.
+const AT_REF_RE = /(^|\s)@([A-Za-z]:[\\/][^\s@]*|[\w./\\-][\w./\\:-]*)/g;
 
 export async function parseInput(rawText: string): Promise<ParsedInput> {
   const result: ParsedInput = { text: rawText, blocks: [], attachments: [], errors: [] };
@@ -31,6 +35,22 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
   ATTACH_BLOCK_RE.lastIndex = 0;
   while ((m = ATTACH_BLOCK_RE.exec(rawText)) !== null) {
     matches.push({ full: m[0], pathArg: m[1].trim() });
+  }
+
+  // @file references — only attach if the resolved path actually exists as a
+  // file. Bare @words (like @ai or @username) get left alone.
+  AT_REF_RE.lastIndex = 0;
+  while ((m = AT_REF_RE.exec(rawText)) !== null) {
+    const pathArg = m[2];
+    const resolved = path.resolve(pathArg);
+    try {
+      const stat = await fs.stat(resolved);
+      if (stat.isFile()) {
+        matches.push({ full: `@${pathArg}`, pathArg });
+      }
+    } catch {
+      // not a real file — leave it alone
+    }
   }
 
   if (matches.length === 0) {
