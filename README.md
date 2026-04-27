@@ -78,24 +78,70 @@ arnie> [reads the SMB error, investigates...]
 
 | Tool | Purpose |
 | --- | --- |
-| `shell` | Run a foreground shell command (PowerShell on Windows, `/bin/sh` elsewhere). Destructive commands require user confirmation. |
+| `shell` | Foreground shell command (PowerShell on Windows, `/bin/sh` elsewhere). Destructive commands require confirmation; commands matching `.arnie/permissions.json` allow rules can skip the prompt. |
 | `shell_background` | Start a long-running command in the background; returns a `job_id` immediately. Use for `chkdsk`, `sfc /scannow`, package builds, log tails. |
 | `shell_status` | Poll a background job's state and recent output. |
 | `shell_kill` | Force-kill a background job. |
 | `read_file` | Read a file (with optional line range, 200KB cap). |
 | `write_file` | Write a file (always confirms; shows a content preview). |
+| `edit_file` | String-replacement edit (always confirms; shows a diff preview). Prefer over write_file for partial changes. |
 | `list_dir` | List directory contents with type + size. |
 | `grep` | Regex search across files (skips node_modules/.git/dist; supports glob, context lines, literal mode). |
+| `network_check` | Ping + optional TCP port probe. Cross-platform wrapper. |
+| `service_check` | List Windows services / Linux systemd units with status. |
+| `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 
 ### Cross-session memory
 
 If `.arnie/memory.md` exists in the current directory or `~/.arnie/memory.md` exists in your home directory, the contents are loaded into the system prompt at startup. Use it for stable, cross-session context — *"this network uses 10.0.0.0/8, AD DC is at 10.0.0.5, all servers run Server 2022"*. Cheaper than re-explaining it every session.
 
+Append new facts on the fly with `/remember <fact>` — appends a dated line to `.arnie/memory.md`.
+
+### Skills
+
+Drop scoped expertise into `.arnie/skills/<name>/SKILL.md` (project) or `~/.arnie/skills/<name>/SKILL.md` (global). Each `SKILL.md` should start with frontmatter:
+
+```yaml
+---
+name: active-directory
+description: AD replication, group policy, FSMO roles. Use when the issue involves domain controllers or AD authentication.
+---
+
+# Active Directory playbook
+
+...
+```
+
+The skill name and description are loaded into the system prompt at startup; the body is loaded on demand when the model decides it's relevant (it calls `read_file` with the skill path). This keeps the base system prompt small while making specialized knowledge discoverable.
+
+### Permissions config
+
+`.arnie/permissions.json` lets you pre-approve safe commands or block dangerous ones. Patterns are JS regexes matched against the full command string.
+
+```json
+{
+  "allow": [
+    { "pattern": "^Get-Service\\b", "reason": "read-only PS" }
+  ],
+  "deny": [
+    { "pattern": "\\bformat\\s+[a-zA-Z]:", "reason": "no formatting drives, ever" }
+  ]
+}
+```
+
+Deny is checked first and refuses outright. Allow takes effect *after* the destructive-pattern detector triggers — it lets you skip the `[y/N]` for commands you trust.
+
 ### Resume a previous conversation
 
 ```sh
 arnie --resume printer-issue   # picks up where /save printer-issue left off
+```
+
+### Initialize a workspace
+
+```sh
+arnie --init    # scaffolds .arnie/ with memory.md, permissions.json, an example skill
 ```
 
 ## Flags
@@ -106,13 +152,18 @@ arnie --resume printer-issue   # picks up where /save printer-issue left off
 --max-tokens <n>        Max output tokens per turn (default: 64000)
 --no-thinking           Disable adaptive thinking
 --no-compact            Disable server-side context compaction
+--no-context-edit       Disable automatic clearing of stale tool outputs
 --no-web-search         Don't expose web_search tool
+--no-subagent           Don't expose subagent tool
+--no-skills             Don't load .arnie/skills/*
 --no-memory             Don't load .arnie/memory.md or ARNIE.md
+--no-permissions        Ignore .arnie/permissions.json
 --no-transcript         Don't write a session transcript
 --transcript-dir <dir>  Transcript directory (default: ~/.arnie/transcripts)
 --no-usage              Hide per-turn token/cost display
 --system-extra <text>   Append text to the system prompt
 --resume <name>         Resume a saved session by name
+--init                  Scaffold .arnie/ in current cwd and exit
 --version               Print version and exit
 -h, --help              Show help
 ```

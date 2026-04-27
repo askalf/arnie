@@ -13,6 +13,11 @@ export interface Config {
   resume?: string;
   noWebSearch: boolean;
   noMemory: boolean;
+  noSubagent: boolean;
+  noSkills: boolean;
+  noPermissions: boolean;
+  noContextEdit: boolean;
+  init: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -27,6 +32,11 @@ const DEFAULTS: Config = {
   compact: true,
   noWebSearch: false,
   noMemory: false,
+  noSubagent: false,
+  noSkills: false,
+  noPermissions: false,
+  noContextEdit: false,
+  init: false,
 };
 
 const VALID_EFFORTS: Config["effort"][] = ["low", "medium", "high", "xhigh", "max"];
@@ -94,6 +104,21 @@ export function parseArgs(argv: string[]): Config {
       case "--no-memory":
         config.noMemory = true;
         break;
+      case "--no-subagent":
+        config.noSubagent = true;
+        break;
+      case "--no-skills":
+        config.noSkills = true;
+        break;
+      case "--no-permissions":
+        config.noPermissions = true;
+        break;
+      case "--no-context-edit":
+        config.noContextEdit = true;
+        break;
+      case "--init":
+        config.init = true;
+        break;
       default:
         throw new Error(`unknown option: ${arg}`);
     }
@@ -109,13 +134,18 @@ Options:
   --max-tokens <n>        Max output tokens per turn (default: 64000)
   --no-thinking           Disable adaptive thinking
   --no-compact            Disable server-side context compaction
+  --no-context-edit       Disable automatic clearing of stale tool outputs
   --no-web-search         Disable web search tool
+  --no-subagent           Disable subagent (Haiku) tool
+  --no-skills             Don't load .arnie/skills/*
   --no-memory             Don't load .arnie/memory.md
+  --no-permissions        Ignore .arnie/permissions.json
   --no-transcript         Don't write a session transcript
   --transcript-dir <dir>  Directory for transcripts (default: ~/.arnie/transcripts)
   --no-usage              Don't display per-turn usage
-  --system-extra <text>   Append text to the system prompt (machine-specific instructions)
+  --system-extra <text>   Append text to the system prompt
   --resume <name>         Resume a saved session by name
+  --init                  Scaffold .arnie/ directory in current cwd and exit
   --version               Print version and exit
   -h, --help              Show this help and exit
 
@@ -132,7 +162,10 @@ Slash commands inside the REPL:
   /load <name>            Load a saved conversation (replaces current)
   /list                   List saved sessions
   /memory                 Show the contents of memory files in use
+  /remember <fact>        Append a line to .arnie/memory.md
+  /skills                 List discovered skills
   /jobs                   List running background shell jobs
+  /cd <path>              Change cwd for shell-tool calls
   /exit                   Quit
 
 Environment:

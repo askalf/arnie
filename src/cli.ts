@@ -3,6 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import chalk from "chalk";
 import process from "node:process";
 import os from "node:os";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { buildSystemBlocks, appendMemoryBlock } from "./systemPrompt.js";
 import { closeReadline } from "./confirm.js";
@@ -10,12 +12,16 @@ import { readUserInput } from "./input.js";
 import { parseArgs, HELP_TEXT, type Config } from "./config.js";
 import { accumulate, emptyTotals, formatSessionTotals, formatTurnUsage } from "./usage.js";
 import { createTranscriptWriter, type TranscriptWriter } from "./transcript.js";
-import { buildToolList, dispatchTool } from "./tools/registry.js";
+import { buildToolList, dispatchTool, type ToolContext } from "./tools/registry.js";
 import { listJobs } from "./tools/backgroundShell.js";
+import { setShellPermissions } from "./tools/shell.js";
 import { saveSession, loadSession, listSessions } from "./sessions.js";
 import { loadMemoryFiles, formatMemoryBlock, type MemoryFile } from "./memory.js";
+import { discoverSkills, formatSkillsBlock, type Skill } from "./skills.js";
+import { loadPermissions } from "./permissions.js";
+import { initWorkspace } from "./init.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const BANNER = `${chalk.bold.cyan("arnie")} ${chalk.dim(`v${VERSION} — IT troubleshooting companion`)}
@@ -28,7 +34,10 @@ const REPL_HELP = `${chalk.bold("Slash commands:")}
   ${chalk.white("/clear")}           reset the conversation
   ${chalk.white("/tools")}           list registered tools
   ${chalk.white("/jobs")}            list background shell jobs
+  ${chalk.white("/skills")}          list discovered skills
   ${chalk.white("/memory")}          show loaded memory files
+  ${chalk.white("/remember <fact>")} append a line to .arnie/memory.md
+  ${chalk.white("/cd <path>")}       change cwd
   ${chalk.white("/save <name>")}     save the current conversation
   ${chalk.white("/load <name>")}     load a saved conversation
   ${chalk.white("/list")}            list saved sessions
@@ -38,7 +47,9 @@ ${chalk.bold("Input:")}
   and end multi-line mode (paste logs, stack traces, etc.).
 ${chalk.bold("Tools available to the model:")}
   ${chalk.white("shell, shell_background, shell_status, shell_kill")}
-  ${chalk.white("read_file, write_file, list_dir, grep")}
+  ${chalk.white("read_file, write_file, edit_file, list_dir, grep")}
+  ${chalk.white("network_check, service_check")}
+  ${chalk.white("subagent")} (Haiku-backed read-only delegation)
   ${chalk.white("web_search")} (server-side)
 `;
 
@@ -50,6 +61,7 @@ interface TurnContext {
   totals: ReturnType<typeof emptyTotals>;
   transcript: TranscriptWriter;
   abortController: { current: AbortController | null };
+  toolCtx: ToolContext;
 }
 
 async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Promise<void> {
@@ -70,14 +82,22 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
       stream: true,
     };
 
+    const edits: NonNullable<Anthropic.Beta.MessageCreateParams["context_management"]>["edits"] = [];
     if (ctx.config.compact) {
-      requestParams.context_management = {
-        edits: [{ type: "compact_20260112" }],
-      };
+      edits.push({ type: "compact_20260112" });
+    }
+    if (!ctx.config.noContextEdit) {
+      edits.push({ type: "clear_tool_uses_20250919" });
+    }
+    if (edits.length > 0) {
+      requestParams.context_management = { edits };
     }
 
+    const betas: string[] = [];
+    if (ctx.config.compact) betas.push(COMPACT_BETA);
+
     const stream = ctx.client.beta.messages.stream(
-      ctx.config.compact ? { ...requestParams, betas: [COMPACT_BETA] } : requestParams,
+      betas.length > 0 ? { ...requestParams, betas } : requestParams,
       { signal: ctx.abortController.current.signal },
     );
 
@@ -129,7 +149,7 @@ async function runTurn(ctx: TurnContext, messages: Anthropic.MessageParam[]): Pr
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const tool of toolUseBlocks) {
-      const result = await dispatchTool(tool.name, tool.input);
+      const result = await dispatchTool(tool.name, tool.input, ctx.toolCtx);
       toolResults.push({
         type: "tool_result",
         tool_use_id: tool.id,
@@ -183,6 +203,7 @@ interface SlashContext {
   model: string;
   tools: Anthropic.ToolUnion[];
   memoryFiles: MemoryFile[];
+  skills: Skill[];
 }
 
 async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exit" | "continue" | null> {
@@ -227,6 +248,17 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
     }
     return "continue";
   }
+  if (lower === "/skills") {
+    if (ctx.skills.length === 0) {
+      console.log(chalk.dim("no skills loaded (.arnie/skills/<name>/SKILL.md)"));
+    } else {
+      for (const s of ctx.skills) {
+        console.log(`  ${chalk.white(s.name)} ${chalk.dim(`(${s.scope})`)} — ${s.description}`);
+        console.log(chalk.dim(`    ${s.path}`));
+      }
+    }
+    return "continue";
+  }
   if (lower === "/memory") {
     if (ctx.memoryFiles.length === 0) {
       console.log(chalk.dim("no memory files loaded (looked for .arnie/memory.md, ARNIE.md, ~/.arnie/memory.md)"));
@@ -236,6 +268,47 @@ async function handleSlashCommand(line: string, ctx: SlashContext): Promise<"exi
         console.log(f.content.trim());
         console.log();
       }
+    }
+    return "continue";
+  }
+  if (lower === "/remember") {
+    if (!arg) {
+      console.log(chalk.yellow("usage: /remember <fact>"));
+      return "continue";
+    }
+    const projectMem = path.join(process.cwd(), ".arnie", "memory.md");
+    try {
+      await fs.mkdir(path.dirname(projectMem), { recursive: true });
+      let exists = true;
+      try {
+        await fs.access(projectMem);
+      } catch {
+        exists = false;
+      }
+      const ts = new Date().toISOString().slice(0, 10);
+      const line = `- ${arg} ${chalk.reset("")}_(added ${ts})_\n`.replace(/\[[0-9;]*m/g, "");
+      if (!exists) {
+        await fs.writeFile(projectMem, `# Arnie memory\n\n${line}`, "utf8");
+      } else {
+        await fs.appendFile(projectMem, line, "utf8");
+      }
+      console.log(chalk.dim(`appended to ${projectMem}`));
+    } catch (err) {
+      console.error(chalk.red(`failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return "continue";
+  }
+  if (lower === "/cd") {
+    if (!arg) {
+      console.log(`${chalk.dim("cwd:")} ${process.cwd()}`);
+      return "continue";
+    }
+    try {
+      const target = path.resolve(arg);
+      process.chdir(target);
+      console.log(chalk.dim(`cwd → ${target}`));
+    } catch (err) {
+      console.error(chalk.red(`cd failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     return "continue";
   }
@@ -310,6 +383,10 @@ async function main(): Promise<void> {
     console.log(`arnie v${VERSION}`);
     process.exit(0);
   }
+  if (config.init) {
+    await initWorkspace();
+    process.exit(0);
+  }
 
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error(chalk.red("error: ANTHROPIC_API_KEY is not set"));
@@ -325,7 +402,25 @@ async function main(): Promise<void> {
     systemBlocks = appendMemoryBlock(systemBlocks, formatMemoryBlock(memoryFiles));
   }
 
-  const tools = buildToolList({ webSearch: !config.noWebSearch });
+  const skills = config.noSkills ? [] : await discoverSkills();
+  if (skills.length > 0) {
+    systemBlocks = appendMemoryBlock(systemBlocks, formatSkillsBlock(skills));
+  }
+
+  if (!config.noPermissions) {
+    try {
+      const perms = await loadPermissions();
+      setShellPermissions(perms);
+      if (perms.source) {
+        console.log(chalk.dim(`permissions: ${perms.source} (allow=${perms.allow.length}, deny=${perms.deny.length})`));
+      }
+    } catch (err) {
+      console.error(chalk.red(`permissions load failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
+  const tools = buildToolList({ webSearch: !config.noWebSearch, subagent: !config.noSubagent });
+  const toolCtx: ToolContext = { client };
 
   const messages: Anthropic.MessageParam[] = [];
   if (config.resume) {
@@ -366,6 +461,9 @@ async function main(): Promise<void> {
   if (memoryFiles.length > 0) {
     console.log(chalk.dim(`memory: ${memoryFiles.map((f) => f.path).join(", ")}`));
   }
+  if (skills.length > 0) {
+    console.log(chalk.dim(`skills: ${skills.length} loaded (${skills.map((s) => s.name).join(", ")})`));
+  }
   if (transcript.enabled && transcript.path) {
     console.log(chalk.dim(`transcript: ${transcript.path}`));
   }
@@ -380,6 +478,7 @@ async function main(): Promise<void> {
     totals,
     transcript,
     abortController,
+    toolCtx,
   };
   const slashCtx: SlashContext = {
     messages,
@@ -387,6 +486,7 @@ async function main(): Promise<void> {
     model: config.model,
     tools,
     memoryFiles,
+    skills,
   };
 
   let sigintCount = 0;

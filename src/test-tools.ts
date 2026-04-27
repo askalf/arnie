@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type Anthropic from "@anthropic-ai/sdk";
 import { runReadFile } from "./tools/readFile.js";
 import { runShell } from "./tools/shell.js";
 import { runListDir } from "./tools/listDir.js";
@@ -12,6 +13,11 @@ import { accumulate, emptyTotals, turnCost } from "./usage.js";
 import { createTranscriptWriter } from "./transcript.js";
 import { saveSession, loadSession, listSessions } from "./sessions.js";
 import { loadMemoryFiles, formatMemoryBlock } from "./memory.js";
+import { runEditFile } from "./tools/editFile.js";
+import { discoverSkills, formatSkillsBlock } from "./skills.js";
+import { evaluateCommand, loadPermissions } from "./permissions.js";
+import { setShellPermissions, runShell } from "./tools/shell.js";
+import { initWorkspace } from "./init.js";
 
 interface Case {
   name: string;
@@ -477,7 +483,10 @@ async function memoryTests(): Promise<void> {
 }
 
 async function dispatchTests(): Promise<void> {
-  const r1 = await dispatchTool("read_file", { path: "package.json" });
+  const fakeClient = {} as Anthropic;
+  const ctx = { client: fakeClient };
+
+  const r1 = await dispatchTool("read_file", { path: "package.json" }, ctx);
   const parsed1 = JSON.parse(r1);
   cases.push({
     name: "dispatch: routes to read_file",
@@ -485,7 +494,7 @@ async function dispatchTests(): Promise<void> {
     detail: `ok=${parsed1.ok}`,
   });
 
-  const r2 = await dispatchTool("read_file", { /* missing path */ });
+  const r2 = await dispatchTool("read_file", { /* missing path */ }, ctx);
   const parsed2 = JSON.parse(r2);
   cases.push({
     name: "dispatch: zod rejects bad input",
@@ -493,7 +502,7 @@ async function dispatchTests(): Promise<void> {
     detail: parsed2.error,
   });
 
-  const r3 = await dispatchTool("nonexistent_tool", {});
+  const r3 = await dispatchTool("nonexistent_tool", {}, ctx);
   const parsed3 = JSON.parse(r3);
   cases.push({
     name: "dispatch: unknown tool returns error",
@@ -501,19 +510,185 @@ async function dispatchTests(): Promise<void> {
     detail: parsed3.error,
   });
 
-  const tools = buildToolList({ webSearch: true });
+  const tools = buildToolList({ webSearch: true, subagent: true });
   cases.push({
-    name: "dispatch: web_search included when enabled",
-    pass: tools.some((t) => "name" in t && t.name === "web_search"),
+    name: "dispatch: web_search and subagent included",
+    pass:
+      tools.some((t) => "name" in t && t.name === "web_search") &&
+      tools.some((t) => "name" in t && t.name === "subagent"),
     detail: `${tools.length} tools`,
   });
 
-  const noWeb = buildToolList({ webSearch: false });
+  const minimal = buildToolList({ webSearch: false, subagent: false });
   cases.push({
-    name: "dispatch: web_search excluded when disabled",
-    pass: !noWeb.some((t) => "name" in t && t.name === "web_search"),
-    detail: `${noWeb.length} tools`,
+    name: "dispatch: web_search/subagent excluded when disabled",
+    pass:
+      !minimal.some((t) => "name" in t && t.name === "web_search") &&
+      !minimal.some((t) => "name" in t && t.name === "subagent"),
+    detail: `${minimal.length} tools`,
   });
+}
+
+async function editFileTests(): Promise<void> {
+  // edit_file uses confirm() for user gating which would block tests.
+  // Test the validation paths that don't require user input.
+
+  // identical strings
+  const tmpDir = path.join(os.tmpdir(), `arnie-edit-${Date.now()}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const target = path.join(tmpDir, "f.txt");
+  await fs.writeFile(target, "hello world\nhello again\nfoo\n", "utf8");
+
+  const r1 = await runEditFile({ path: target, old_string: "same", new_string: "same" });
+  cases.push({
+    name: "edit_file: identical old/new rejected",
+    pass: !r1.ok && r1.error !== undefined && r1.error.includes("identical"),
+    detail: r1.error ?? "expected error",
+  });
+
+  const r2 = await runEditFile({ path: target, old_string: "not-found-string", new_string: "x" });
+  cases.push({
+    name: "edit_file: missing old_string rejected",
+    pass: !r2.ok && r2.error !== undefined && r2.error.includes("not found"),
+    detail: r2.error ?? "expected error",
+  });
+
+  const r3 = await runEditFile({ path: target, old_string: "hello", new_string: "HI" });
+  cases.push({
+    name: "edit_file: ambiguous match rejected without replace_all",
+    pass: !r3.ok && r3.error !== undefined && r3.error.includes("2 times"),
+    detail: r3.error ?? "expected error",
+  });
+
+  const r4 = await runEditFile({ path: path.join(tmpDir, "missing.txt"), old_string: "a", new_string: "b" });
+  cases.push({
+    name: "edit_file: missing file rejected",
+    pass: !r4.ok && r4.error !== undefined,
+    detail: r4.error ?? "expected error",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
+async function permissionsTests(): Promise<void> {
+  const cfg = {
+    allow: [{ pattern: "^Get-Service\\b", reason: "ro PS" }],
+    deny: [{ pattern: "format\\s+[a-zA-Z]:", reason: "no formatting" }],
+    source: "test",
+  };
+
+  const a = evaluateCommand("Get-Service spooler", cfg);
+  cases.push({
+    name: "permissions: allow rule matches",
+    pass: a.decision === "allow" && a.rule === "^Get-Service\\b",
+    detail: `${a.decision} (${a.rule})`,
+  });
+
+  const d = evaluateCommand("format c:", cfg);
+  cases.push({
+    name: "permissions: deny rule matches",
+    pass: d.decision === "deny",
+    detail: `${d.decision}`,
+  });
+
+  const u = evaluateCommand("Get-Process", cfg);
+  cases.push({
+    name: "permissions: unmatched returns ask",
+    pass: u.decision === "ask",
+    detail: `${u.decision}`,
+  });
+
+  // shell tool integration: deny path
+  setShellPermissions(cfg);
+  const denied = await runShell({ command: "format c:" });
+  cases.push({
+    name: "permissions: shell tool returns cancelled on deny",
+    pass: !denied.ok && denied.cancelled === true,
+    detail: `cancelled=${denied.cancelled}, exit=${denied.exit_code}`,
+  });
+
+  // reset to empty so later shell tests don't get tripped
+  setShellPermissions({ allow: [], deny: [], source: null });
+}
+
+async function skillsTests(): Promise<void> {
+  const skillRoot = path.join(process.cwd(), ".arnie", "skills", "test-skill");
+  await fs.mkdir(skillRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(skillRoot, "SKILL.md"),
+    `---
+name: test-skill
+description: A test skill that does test things.
+---
+
+# Test skill body
+
+Body content.
+`,
+    "utf8",
+  );
+
+  const skills = await discoverSkills();
+  cases.push({
+    name: "skills: discovers project skill",
+    pass: skills.some((s) => s.name === "test-skill" && s.scope === "project"),
+    detail: `found ${skills.length} skills`,
+  });
+
+  const block = formatSkillsBlock(skills);
+  cases.push({
+    name: "skills: formats block",
+    pass: block.includes("test-skill") && block.includes("test things"),
+    detail: `block.length=${block.length}`,
+  });
+
+  cases.push({
+    name: "skills: empty list returns empty string",
+    pass: formatSkillsBlock([]) === "",
+    detail: "ok",
+  });
+
+  await fs.rm(path.join(process.cwd(), ".arnie", "skills"), { recursive: true, force: true });
+}
+
+async function initTests(): Promise<void> {
+  const tmpDir = path.join(os.tmpdir(), `arnie-init-${Date.now()}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const result = await initWorkspace(tmpDir);
+  cases.push({
+    name: "init: creates expected files",
+    pass:
+      result.created.length === 4 &&
+      result.created.some((f) => f.endsWith("memory.md")) &&
+      result.created.some((f) => f.endsWith("permissions.json")) &&
+      result.created.some((f) => f.endsWith("SKILL.md")) &&
+      result.created.some((f) => f.endsWith(".gitignore")),
+    detail: `created ${result.created.length}, skipped ${result.skipped.length}`,
+  });
+
+  // run again — should skip everything
+  const second = await initWorkspace(tmpDir);
+  cases.push({
+    name: "init: idempotent (skips existing)",
+    pass: second.created.length === 0 && second.skipped.length === 4,
+    detail: `created ${second.created.length}, skipped ${second.skipped.length}`,
+  });
+
+  // permissions.json should be valid JSON
+  const permRaw = await fs.readFile(path.join(tmpDir, ".arnie", "permissions.json"), "utf8");
+  let permsValid = true;
+  try {
+    JSON.parse(permRaw);
+  } catch {
+    permsValid = false;
+  }
+  cases.push({
+    name: "init: scaffolded permissions.json is valid JSON",
+    pass: permsValid,
+    detail: permsValid ? "ok" : "parse failed",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
 }
 
 async function main(): Promise<void> {
@@ -528,6 +703,10 @@ async function main(): Promise<void> {
   await sessionTests();
   await memoryTests();
   await dispatchTests();
+  await editFileTests();
+  await permissionsTests();
+  await skillsTests();
+  await initTests();
 
   console.log();
   console.log("=".repeat(70));

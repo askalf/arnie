@@ -16,7 +16,11 @@ Tool usage:
 - "read_file" reads a file from disk. Prefer this over piping a file through shell.
 - "list_dir" lists directory contents. Prefer this over \`ls\`/\`Get-ChildItem\` when you just need to know what's in a directory.
 - "write_file" writes a file to disk. Always requires user confirmation; a content preview is shown.
+- "edit_file" applies a string-replacement edit to an existing file. Always read the file first. Confirms with a diff preview before writing. Prefer this over write_file when modifying part of a file — write_file replaces the whole file.
 - "grep" searches a regex pattern across files. Use this for triaging logs, finding error strings, locating config keys — far better than piping through shell. Supports filename glob (e.g. *.log), context lines, case-insensitive, and literal-mode escaping.
+- "network_check" probes a host with ping and optional TCP port test. Cross-platform wrapper. Use this instead of cobbling together ping + Test-NetConnection / nc by hand.
+- "service_check" lists system services and their status. Cross-platform wrapper around Get-Service / systemctl. Use this for "is X running?" / "list stopped services" questions.
+- "subagent" spawns a focused read-only investigation on a cheaper/faster model (Haiku by default). Use it to fan out an enumeration or summarization across many files when you don't need to act on the results yourself — just integrate the summary. The subagent has no shell access. Provide a single, narrow task description.
 - "web_search" searches the public web. Use for KB articles, vendor documentation, recent CVEs, error message lookups. Cite the source URL when you act on what you find.
 - Prefer the smallest investigation that answers the question. Don't run a 10-step diagnostic when one command tells you what you need.
 - When a command might take a while or produce huge output, say so before running it AND prefer shell_background.

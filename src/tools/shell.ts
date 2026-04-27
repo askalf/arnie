@@ -2,6 +2,13 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 import chalk from "chalk";
 import { confirm } from "../confirm.js";
+import { evaluateCommand, type PermissionsConfig } from "../permissions.js";
+
+let permissions: PermissionsConfig = { allow: [], deny: [], source: null };
+
+export function setShellPermissions(config: PermissionsConfig): void {
+  permissions = config;
+}
 
 const MAX_OUTPUT_BYTES = 50_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -81,8 +88,21 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
   console.log(chalk.cyan("$ ") + chalk.white(command));
   if (input.reason) console.log(chalk.dim(`  reason: ${input.reason}`));
 
+  const decision = evaluateCommand(command, permissions);
+  if (decision.decision === "deny") {
+    console.log(chalk.red(`  ✕ denied by permissions config: ${decision.reason ?? decision.rule}`));
+    return {
+      ok: false,
+      exit_code: null,
+      stdout: "",
+      stderr: `Command denied by permissions config (rule: ${decision.rule}). ${decision.reason ?? ""} Try a different approach.`,
+      truncated: false,
+      cancelled: true,
+    };
+  }
+
   const danger = looksDestructive(command);
-  if (danger) {
+  if (danger && decision.decision !== "allow") {
     console.log(chalk.red(`  ⚠ flagged as potentially destructive: ${danger}`));
     const ok = await confirm("  Run this command?");
     if (!ok) {
@@ -96,6 +116,8 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
         cancelled: true,
       };
     }
+  } else if (decision.decision === "allow" && danger) {
+    console.log(chalk.dim(`  pre-approved by permissions config (rule: ${decision.rule}); skipping confirmation`));
   }
 
   const isWindows = process.platform === "win32";
