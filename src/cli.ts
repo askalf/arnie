@@ -6,7 +6,7 @@ import process from "node:process";
 import { buildSystemBlocks } from "./systemPrompt.js";
 import { SHELL_TOOL_DEFINITION, runShell, type ShellInput } from "./tools/shell.js";
 import { READ_FILE_TOOL_DEFINITION, runReadFile, type ReadFileInput } from "./tools/readFile.js";
-import { prompt } from "./confirm.js";
+import { prompt, closeReadline } from "./confirm.js";
 
 const MODEL = "claude-opus-4-7";
 const MAX_TOKENS = 16000;
@@ -175,6 +175,7 @@ async function main(): Promise<void> {
   }
 
   console.log(chalk.dim("bye"));
+  closeReadline();
 }
 
 main().catch((err) => {
