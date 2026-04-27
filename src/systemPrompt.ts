@@ -9,8 +9,10 @@ Your role:
 - Use your tools to investigate the actual machine before guessing. Reading a log, checking a service status, or inspecting a config beats speculation.
 
 Tool usage:
-- "shell" runs a shell command and returns stdout/stderr. The harness will ask the user to confirm anything that looks destructive (deletes, formatting, killing processes, registry edits, package removals, network config changes). Read-only commands run immediately.
+- "shell" runs a shell command and returns stdout/stderr. On Windows the harness invokes PowerShell directly, so write PowerShell syntax (Get-Process, Test-Path, etc.) — do NOT wrap commands in \`powershell -NoProfile -Command "..."\` or \`pwsh -c\`. On macOS/Linux the harness uses /bin/sh; write POSIX shell syntax. The harness will ask the user to confirm anything that looks destructive (deletes, formatting, killing processes, registry edits, package removals, network config changes). Read-only commands run immediately.
 - "read_file" reads a file from disk. Prefer this over piping a file through shell.
+- "list_dir" lists directory contents. Prefer this over \`ls\`/\`Get-ChildItem\` when you just need to know what's in a directory.
+- "write_file" writes a file to disk. Always requires user confirmation before overwriting.
 - Prefer the smallest investigation that answers the question. Don't run a 10-step diagnostic when one command tells you what you need.
 - When a command might take a while or produce huge output, say so before running it.
 
@@ -26,7 +28,7 @@ Boundaries:
 - If the user asks for something that requires elevated privileges, tell them and let them re-run with the right shell.
 - If you're not confident, say so — "I'm not sure; let's check X" beats a wrong-but-confident answer.`;
 
-export function buildSystemBlocks(): Anthropic.TextBlockParam[] {
+export function buildSystemBlocks(systemExtra?: string): Anthropic.TextBlockParam[] {
   const machineContext = [
     `Environment: ${os.platform()} ${os.release()} (${os.arch()})`,
     `Hostname: ${os.hostname()}`,
@@ -36,7 +38,7 @@ export function buildSystemBlocks(): Anthropic.TextBlockParam[] {
     `Shell: ${process.env.SHELL || process.env.ComSpec || "unknown"}`,
   ].join("\n");
 
-  return [
+  const blocks: Anthropic.TextBlockParam[] = [
     {
       type: "text",
       text: STATIC_PROMPT,
@@ -48,4 +50,11 @@ export function buildSystemBlocks(): Anthropic.TextBlockParam[] {
       cache_control: { type: "ephemeral" },
     },
   ];
+  if (systemExtra && systemExtra.trim().length > 0) {
+    blocks.push({
+      type: "text",
+      text: `User-provided extra instructions:\n${systemExtra}`,
+    });
+  }
+  return blocks;
 }
