@@ -1,7 +1,32 @@
 {
   "name": "arnie-cli",
   "version": "1.1.1",
-  "description": "Portable IT troubleshooting companion powered by Claude",
+  "description": "Portable IT troubleshooting companion powered by Claude — networking, AD, Windows Update, package managers, log triage, hardware checks, dev environments.",
+  "keywords": [
+    "claude",
+    "anthropic",
+    "ai",
+    "cli",
+    "troubleshooting",
+    "it",
+    "sysadmin",
+    "windows",
+    "linux",
+    "macos",
+    "agent",
+    "tool-use",
+    "developer-tools"
+  ],
+  "author": "askalf (https://github.com/askalf)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/askalf/arnie.git"
+  },
+  "homepage": "https://github.com/askalf/arnie",
+  "bugs": {
+    "url": "https://github.com/askalf/arnie/issues"
+  },
   "type": "module",
   "bin": {
     "arnie": "dist/cli.js"
@@ -9,7 +34,8 @@
   "main": "dist/cli.js",
   "files": [
     "dist/**/*",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
