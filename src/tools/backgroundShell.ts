@@ -251,6 +251,18 @@ export async function runShellKill(input: ShellKillInput): Promise<ShellKillResu
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, job_id: job.id, killed: false, error: msg };
   }
+  // Wait briefly for the close event to fire so subsequent shell_status
+  // calls observe the job as "killed" rather than racing with the OS.
+  // SIGKILL is unblockable so the child dies promptly; the 2s ceiling is
+  // a safety net for severely overloaded runners.
+  await new Promise<void>((resolve) => {
+    if (job.doneAt !== null) return resolve();
+    const timer = setTimeout(resolve, 2000);
+    job.child.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
   return { ok: true, job_id: job.id, killed: true };
 }
 
