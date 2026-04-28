@@ -398,14 +398,23 @@ The `.arnie/` directory in cwd is gitignored by default if you check this repo o
 - The model is told to call out risk before destructive steps and to ask for elevation when needed.
 - First Ctrl+C cancels the in-flight model request; second Ctrl+C exits.
 
+## Notes
+
+### Paths on Windows under MSYS / Git Bash
+
+If you're running arnie from MSYS bash, Cygwin, or Git Bash on Windows, paste **Windows-shaped paths** into prompts (`C:/Users/you/...` or `C:\Users\you\...`), not Unix-shaped ones. Bash's `/tmp` aliases to `%LOCALAPPDATA%\Temp` for the shell, but arnie runs as a Node process and resolves the literal string `/tmp` to `C:\tmp` — which doesn't exist. PowerShell, cmd.exe, and WSL are unaffected.
+
 ## Development
 
 ```sh
-npm run dev          # tsx watch
-npm run typecheck    # tsc --noEmit
-npm run build        # tsc → dist/
-npx tsx src/test-tools.ts   # offline test suite (no API needed)
+npm run dev               # tsx watch
+npm run typecheck         # tsc --noEmit
+npm run build             # tsc → dist/
+npm test                  # offline tool unit tests (no API key needed)
+npm run test:integration  # full end-to-end against dario (skips if no backend)
 ```
+
+`npm run test:integration` exercises the real arnie binary through every major tool, both file-mutation paths, mode flags, and the `--budget` regression. It looks for a dario proxy at `http://localhost:3456` by default; pass `--direct` to use `ANTHROPIC_API_KEY` instead. If neither backend is reachable, it exits 0 with `[SKIP]` so it's safe in CI.
 
 ## License
 

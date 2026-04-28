@@ -16,7 +16,8 @@
     "start": "tsx src/cli.ts",
     "dev": "tsx watch src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/test-tools.ts"
+    "test": "tsx src/test-tools.ts",
+    "test:integration": "bash test/integration.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.91.1",
