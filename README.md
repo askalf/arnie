@@ -8,6 +8,14 @@ Built on the Anthropic SDK with `claude-opus-4-7`, adaptive thinking, server-sid
 
 Requires Node.js 20+.
 
+From npm:
+
+```sh
+npm install -g arnie-cli    # exposes `arnie` globally
+```
+
+From source:
+
 ```sh
 git clone <this repo> arnie
 cd arnie
