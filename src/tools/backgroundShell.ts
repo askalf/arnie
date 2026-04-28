@@ -135,16 +135,20 @@ export async function runShellBackground(input: ShellBgInput): Promise<ShellBgRe
     job.stderrChunks.push(chunk);
     job.stderrBytes += chunk.length;
   });
-  // `exit` fires the moment the process is gone; `close` only fires once
-  // stdio drains, which on Linux can be much later when a shell child has
-  // grandchildren (e.g. /bin/sh -c "sleep 30") that inherit the pipes.
-  // We want state="killed" to reflect promptly, so use `exit` here.
-  child.on("exit", (code, signal) => {
+  // Listen for both exit and close because their timing is platform-
+  // dependent: on Linux, `close` is delayed when a shell grandchild
+  // (e.g. /bin/sh -c "sleep 30") inherits the pipes after the shell is
+  // killed; on Windows, `exit` doesn't always fire reliably for some
+  // PowerShell children. Whichever fires first wins; the second is a
+  // no-op via the doneAt guard.
+  const markDone = (code: number | null, signal: NodeJS.Signals | null) => {
     if (job.doneAt !== null) return;
     job.exitCode = code;
     job.signal = signal;
     job.doneAt = Date.now();
-  });
+  };
+  child.on("exit", markDone);
+  child.on("close", markDone);
   child.on("error", () => {
     if (job.doneAt !== null) return;
     job.exitCode = -1;
@@ -257,18 +261,16 @@ export async function runShellKill(input: ShellKillInput): Promise<ShellKillResu
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, job_id: job.id, killed: false, error: msg };
   }
-  // Wait briefly for the exit event to fire so subsequent shell_status
-  // calls observe the job as "killed" rather than racing with the OS.
-  // SIGKILL is unblockable so the child dies promptly; the 2s ceiling is
-  // a safety net for severely overloaded runners.
-  await new Promise<void>((resolve) => {
-    if (job.doneAt !== null) return resolve();
-    const timer = setTimeout(resolve, 2000);
-    job.child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
+  // Wait briefly for state to flip so subsequent shell_status calls see
+  // the job as "killed" rather than racing with the OS. SIGKILL is
+  // unblockable so the child dies promptly; the 2s ceiling is a safety
+  // net for severely overloaded runners. We poll job.doneAt rather than
+  // listening for a specific event so this works regardless of which of
+  // exit/close fires first on the current platform.
+  const killDeadline = Date.now() + 2000;
+  while (job.doneAt === null && Date.now() < killDeadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
   return { ok: true, job_id: job.id, killed: true };
 }
 
