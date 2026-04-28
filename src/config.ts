@@ -23,6 +23,7 @@ export interface Config {
   noMarkdown: boolean;
   noMcp: boolean;
   noSandbox: boolean;
+  dryRun: boolean;
   budgetUsd?: number;
   autoCheckpoint?: number;
   quiet: boolean;
@@ -53,6 +54,7 @@ const DEFAULTS: Config = {
   noMarkdown: false,
   noMcp: false,
   noSandbox: false,
+  dryRun: false,
   quiet: false,
   voice: false,
   init: false,
@@ -171,6 +173,9 @@ export function parseArgs(argv: string[], base?: Config): Config {
       case "--no-sandbox":
         config.noSandbox = true;
         break;
+      case "--dry-run":
+        config.dryRun = true;
+        break;
       case "--budget": {
         const v = parseFloat(next("--budget"));
         if (!Number.isFinite(v) || v <= 0) {
@@ -236,6 +241,7 @@ Options:
   -q, --quiet             Suppress tool execution chatter; only show responses
   --voice                 Speak assistant responses (espeak/say/PowerShell SAPI)
   --no-sandbox            Ignore .arnie/sandbox.json path restrictions
+  --dry-run               Investigation only — mutating tools refuse
   --budget <usd>          Halt the session after exceeding $N in tokens
   --auto-checkpoint <n>   Auto-save the session every N user turns
   --no-transcript         Don't write a session transcript

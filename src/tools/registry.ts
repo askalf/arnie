@@ -2,6 +2,7 @@ import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { fireBeforeTool, fireAfterTool, fireOnError } from "../hooks.js";
 import { recordToolCall } from "../toolStats.js";
+import { isDryRun, isMutatingTool, dryRunRefusal } from "../dryRun.js";
 
 import { SHELL_TOOL_DEFINITION, runShell } from "./shell.js";
 import { READ_FILE_TOOL_DEFINITION, runReadFile } from "./readFile.js";
@@ -27,6 +28,7 @@ import { SUBAGENT_TOOL_DEFINITION, runSubagent } from "./subagent.js";
 import { TAIL_LOG_TOOL_DEFINITION, runTailLog } from "./tailLog.js";
 import { PROCESS_CHECK_TOOL_DEFINITION, runProcessCheck } from "./processCheck.js";
 import { DISK_CHECK_TOOL_DEFINITION, runDiskCheck } from "./diskCheck.js";
+import { APPLY_PATCH_TOOL_DEFINITION, runApplyPatch } from "./applyPatch.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -117,6 +119,12 @@ const diskCheckSchema = z.object({
   path: z.string().optional(),
 });
 
+const applyPatchSchema = z.object({
+  path: z.string().min(1),
+  patch: z.string().min(1),
+  reason: z.string().optional(),
+});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -145,6 +153,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   tail_log: { schema: tailLogSchema, run: (i) => runTailLog(i as z.infer<typeof tailLogSchema>) },
   process_check: { schema: processCheckSchema, run: (i) => runProcessCheck(i as z.infer<typeof processCheckSchema>) },
   disk_check: { schema: diskCheckSchema, run: (i) => runDiskCheck(i as z.infer<typeof diskCheckSchema>) },
+  apply_patch: { schema: applyPatchSchema, run: (i) => runApplyPatch(i as z.infer<typeof applyPatchSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -168,6 +177,7 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     TAIL_LOG_TOOL_DEFINITION,
     PROCESS_CHECK_TOOL_DEFINITION,
     DISK_CHECK_TOOL_DEFINITION,
+    APPLY_PATCH_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);
@@ -207,6 +217,9 @@ export async function dispatchTool(name: string, input: unknown, ctx: ToolContex
     const errMsg = `invalid input for ${name}: ${parsed.error.issues.map((i) => `${i.path.join(".")} ${i.message}`).join("; ")}`;
     await fireOnError(name, input, errMsg).catch(() => {});
     return JSON.stringify({ ok: false, error: errMsg });
+  }
+  if (isDryRun() && isMutatingTool(name)) {
+    return dryRunRefusal(name, parsed.data);
   }
   await fireBeforeTool(name, parsed.data).catch(() => {});
   const start = Date.now();

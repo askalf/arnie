@@ -2,6 +2,7 @@ import path from "node:path";
 import chalk from "chalk";
 import type { UsageTotals } from "./usage.js";
 import { listJobs } from "./tools/backgroundShell.js";
+import { isDryRun } from "./dryRun.js";
 
 export interface StatusContext {
   model: string;
@@ -29,6 +30,9 @@ export function renderStatusLine(ctx: StatusContext): string {
 
   if (ctx.planMode) {
     parts.push(chalk.magenta("[plan]"));
+  }
+  if (isDryRun()) {
+    parts.push(chalk.magenta("[dry-run]"));
   }
 
   return parts.join(chalk.dim(" · "));

@@ -32,6 +32,7 @@ import { bufferDelta, flushSpeech, clearSpeechBuffer } from "./voice.js";
 import { formatToolStats, resetToolStats } from "./toolStats.js";
 import { writeSettings, loadSettings as loadSettingsFile } from "./settings.js";
 import { setQuiet } from "./log.js";
+import { setDryRun } from "./dryRun.js";
 import { loadRedactors, setRedactors, describeRedactors } from "./redactors.js";
 import { describeModel } from "./profile.js";
 import { loadPersonaOverride } from "./persona.js";
@@ -40,7 +41,7 @@ import { getUnannouncedFinishedJobs } from "./tools/backgroundShell.js";
 import { appendFeedback, loadFeedback, clearFeedback, feedbackPath } from "./feedback.js";
 import { snapshotTotals, deltaTotals } from "./usage.js";
 
-const VERSION = "0.7.0";
+const VERSION = "0.9.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -697,6 +698,7 @@ async function main(): Promise<void> {
   }
 
   setQuiet(config.quiet);
+  setDryRun(config.dryRun);
 
   const client = new Anthropic({ maxRetries: 3 });
 
@@ -856,7 +858,7 @@ async function main(): Promise<void> {
   process.stdout.write(BANNER);
   console.log(
     chalk.dim(
-      `model=${config.model} effort=${config.effort} thinking=${config.thinking} compact=${config.compact} max_tokens=${config.maxTokens}`,
+      `model=${config.model} effort=${config.effort} thinking=${config.thinking} compact=${config.compact} max_tokens=${config.maxTokens}${config.dryRun ? " " + chalk.magenta("[dry-run]") : ""}`,
     ),
   );
   if (memoryFiles.length > 0) {

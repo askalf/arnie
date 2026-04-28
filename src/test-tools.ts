@@ -1377,6 +1377,91 @@ async function diskCheckTests(): Promise<void> {
   });
 }
 
+async function applyPatchTests(): Promise<void> {
+  const { runApplyPatch } = await import("./tools/applyPatch.js");
+
+  const tmpDir = path.join(os.tmpdir(), `arnie-patch-${Date.now()}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const file = path.join(tmpDir, "f.txt");
+
+  // Cases here exercise the validation paths that don't require user
+  // confirmation. The "apply success" case is exercised in the live E2E.
+
+  // bogus patch (no hunks)
+  await fs.writeFile(file, "abc\ndef\nghi\n", "utf8");
+  const r1 = await runApplyPatch({ path: file, patch: "not a patch at all" });
+  cases.push({
+    name: "apply_patch: rejects invalid patch (no hunks)",
+    pass: !r1.ok && r1.error !== undefined,
+    detail: r1.error ?? "expected error",
+  });
+
+  // patch with mismatched context
+  const badPatch = `@@ -1,3 +1,3 @@\n abc\n-WRONG\n+xyz\n ghi\n`;
+  const r2 = await runApplyPatch({ path: file, patch: badPatch });
+  cases.push({
+    name: "apply_patch: rejects context mismatch",
+    pass: !r2.ok && r2.error !== undefined && r2.error.includes("hunk 1 failed"),
+    detail: r2.error ?? "expected hunk failure",
+  });
+
+  // missing file
+  const r3 = await runApplyPatch({ path: path.join(tmpDir, "missing.txt"), patch: "@@ -1,1 +1,1 @@\n-x\n+y\n" });
+  cases.push({
+    name: "apply_patch: missing file rejected",
+    pass: !r3.ok && r3.error !== undefined,
+    detail: r3.error ?? "expected error",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
+async function dryRunTests(): Promise<void> {
+  const { setDryRun, isDryRun, isMutatingTool } = await import("./dryRun.js");
+  const { dispatchTool } = await import("./tools/registry.js");
+
+  setDryRun(true);
+  cases.push({
+    name: "dry-run: setDryRun toggles state",
+    pass: isDryRun() === true,
+    detail: "ok",
+  });
+
+  cases.push({
+    name: "dry-run: classifies mutating tools",
+    pass:
+      isMutatingTool("write_file") &&
+      isMutatingTool("edit_file") &&
+      isMutatingTool("shell") &&
+      isMutatingTool("apply_patch") &&
+      !isMutatingTool("read_file") &&
+      !isMutatingTool("grep"),
+    detail: "ok",
+  });
+
+  // Mutating tool dispatch should refuse without executing
+  const fakeClient = {} as Anthropic;
+  const ctx = { client: fakeClient };
+  const refusal = await dispatchTool("write_file", { path: "/tmp/wont-be-written", content: "x" }, ctx);
+  const parsed = JSON.parse(refusal);
+  cases.push({
+    name: "dry-run: dispatch refuses mutating tool",
+    pass: parsed.ok === false && typeof parsed.error === "string" && parsed.error.includes("dry-run mode"),
+    detail: parsed.error,
+  });
+
+  // Read-only tool still works
+  const ok = await dispatchTool("read_file", { path: "package.json" }, ctx);
+  const okParsed = JSON.parse(ok);
+  cases.push({
+    name: "dry-run: read-only tools still execute",
+    pass: okParsed.ok === true,
+    detail: "ok",
+  });
+
+  setDryRun(false);
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -1416,6 +1501,8 @@ async function main(): Promise<void> {
   await tailLogTests();
   await processCheckTests();
   await diskCheckTests();
+  await applyPatchTests();
+  await dryRunTests();
 
   console.log();
   console.log("=".repeat(70));

@@ -97,6 +97,7 @@ arnie> [reads the SMB error, investigates...]
 | `tail_log` | Last N lines of a file with optional regex filter — cheaper than `read_file` for large logs. |
 | `process_check` | Cross-platform process listing (PID, name, CPU, memory) with name/pid filter and sort. |
 | `disk_check` | Per-drive total/used/free GB and percent used (`Get-PSDrive` / `df`). |
+| `apply_patch` | Apply a unified-diff patch (with `@@` hunk headers) to a file. Better than `edit_file` for 4+ changes in one file. Confirms with colored preview. |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 
@@ -244,6 +245,14 @@ Set `"defaults": false` to use only your custom rules. Patterns are JS regexes.
 ```
 
 `read_file`, `list_dir`, `write_file`, and `edit_file` all consult this. Paths outside the allowed dirs return a `sandbox denied` error to the model so it can adapt.
+
+### Dry-run mode
+
+`--dry-run` flips the harness into investigation-only mode: read tools (read_file, list_dir, grep, network_check, service_check, tail_log, process_check, disk_check, web_search, subagent) work normally, but mutating tools (shell, shell_background, write_file, edit_file, apply_patch) refuse and return a message telling the model what they'd have done. The model then reports back to you in plain English instead of acting. The status line shows `[dry-run]`.
+
+```sh
+arnie --dry-run
+```
 
 ### Cost budget
 

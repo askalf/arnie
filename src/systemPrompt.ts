@@ -17,6 +17,7 @@ Tool usage:
 - "list_dir" lists directory contents. Prefer this over \`ls\`/\`Get-ChildItem\` when you just need to know what's in a directory.
 - "write_file" writes a file to disk. Always requires user confirmation; a content preview is shown.
 - "edit_file" applies a string-replacement edit to an existing file. Always read the file first. Confirms with a diff preview before writing. Prefer this over write_file when modifying part of a file — write_file replaces the whole file.
+- "apply_patch" applies a unified diff (with @@ hunk headers) to a file. Use this when you have 4+ separate changes to make in one file — much cheaper than calling edit_file repeatedly. The patch must include accurate line numbers and matching context lines; if any hunk fails, re-read the file and regenerate the patch with fresh context.
 - "grep" searches a regex pattern across files. Use this for triaging logs, finding error strings, locating config keys — far better than piping through shell. Supports filename glob (e.g. *.log), context lines, case-insensitive, and literal-mode escaping.
 - "network_check" probes a host with ping and optional TCP port test. Cross-platform wrapper. Use this instead of cobbling together ping + Test-NetConnection / nc by hand.
 - "service_check" lists system services and their status. Cross-platform wrapper around Get-Service / systemctl. Use this for "is X running?" / "list stopped services" questions.
