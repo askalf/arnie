@@ -85,8 +85,8 @@ async function readFileTests(): Promise<void> {
   const r1 = await runReadFile({ path: "package.json" });
   cases.push({
     name: "read_file: read package.json",
-    pass: r1.ok && r1.content !== undefined && r1.content.includes('"name": "arnie"'),
-    detail: r1.ok ? `${r1.bytes} bytes, name found=${r1.content?.includes('"name": "arnie"')}` : `error: ${r1.error}`,
+    pass: r1.ok && r1.content !== undefined && r1.content.includes('"name": "arnie-cli"'),
+    detail: r1.ok ? `${r1.bytes} bytes, name found=${r1.content?.includes('"name": "arnie-cli"')}` : `error: ${r1.error}`,
   });
 
   const r2 = await runReadFile({ path: "package.json", start_line: 1, end_line: 3 });
@@ -401,8 +401,12 @@ async function backgroundJobTests(): Promise<void> {
     detail: `killed=${kr.killed}`,
   });
 
-  await new Promise((r) => setTimeout(r, 200));
-  const afterKill = await runShellStatus({ job_id: killable.job_id! });
+  // Poll for state propagation — fixed 200ms waits flake on slow CI runners.
+  let afterKill = await runShellStatus({ job_id: killable.job_id! });
+  for (let i = 0; i < 20 && afterKill.ok && afterKill.state === "running"; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    afterKill = await runShellStatus({ job_id: killable.job_id! });
+  }
   cases.push({
     name: "shell_kill: state reflects kill",
     pass: afterKill.ok && (afterKill.state === "killed" || afterKill.state === "exited"),
