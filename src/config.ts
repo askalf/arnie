@@ -30,6 +30,8 @@ export interface Config {
   voice: boolean;
   init: boolean;
   printMessage?: string;
+  baseUrl?: string;
+  dario: boolean;
 }
 
 const DEFAULTS: Config = {
@@ -58,6 +60,7 @@ const DEFAULTS: Config = {
   quiet: false,
   voice: false,
   init: false,
+  dario: false,
 };
 
 import type { Settings } from "./settings.js";
@@ -192,6 +195,12 @@ export function parseArgs(argv: string[], base?: Config): Config {
         config.autoCheckpoint = v;
         break;
       }
+      case "--base-url":
+        config.baseUrl = next("--base-url");
+        break;
+      case "--dario":
+        config.dario = true;
+        break;
       case "--no-web-search":
         config.noWebSearch = true;
         break;
@@ -242,6 +251,9 @@ Options:
   --voice                 Speak assistant responses (espeak/say/PowerShell SAPI)
   --no-sandbox            Ignore .arnie/sandbox.json path restrictions
   --dry-run               Investigation only — mutating tools refuse
+  --base-url <url>        Anthropic-compat endpoint (overrides ANTHROPIC_BASE_URL)
+  --dario                 Route through a local dario proxy at http://localhost:3456
+                          (sets base URL + dummy API key if not already set)
   --budget <usd>          Halt the session after exceeding $N in tokens
   --auto-checkpoint <n>   Auto-save the session every N user turns
   --no-transcript         Don't write a session transcript

@@ -34,7 +34,7 @@ import { loadFeedback, feedbackPath } from "./feedback.js";
 import { handleApiError } from "./apiError.js";
 import { handleSlashCommand, type SlashContext } from "./slashCommands.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -257,16 +257,29 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // --dario sets a sensible default base URL + dummy key if unset, so users
+  // don't have to remember to export both env vars.
+  if (config.dario) {
+    if (!config.baseUrl) config.baseUrl = "http://localhost:3456";
+    if (!process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = "dario";
+  }
+
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error(chalk.red("error: ANTHROPIC_API_KEY is not set"));
     console.error(chalk.dim("get a key at https://console.anthropic.com and set it in your environment"));
+    console.error(chalk.dim("(or run with --dario to route through a local dario proxy)"));
     process.exit(1);
   }
 
   setQuiet(config.quiet);
   setDryRun(config.dryRun);
 
-  const client = new Anthropic({ maxRetries: 3 });
+  const clientOpts: ConstructorParameters<typeof Anthropic>[0] = { maxRetries: 3 };
+  if (config.baseUrl) clientOpts.baseURL = config.baseUrl;
+  const client = new Anthropic(clientOpts);
+  if (config.baseUrl) {
+    console.log(chalk.dim(`base url: ${config.baseUrl}${config.dario ? " (via --dario)" : ""}`));
+  }
 
   let personaText: string | undefined = config.systemExtra;
   if (!config.noMemory) {

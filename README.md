@@ -275,6 +275,28 @@ When a `shell_background` job finishes between turns, the next user message is a
 - `/replay <transcript.jsonl>` reconstructs the conversation from a transcript file (handy for resuming a debugging session that wasn't `/save`d).
 - `/feedback "note"` appends a dated note to `~/.arnie/feedback.md`. On the next session start, that file's contents get loaded into the system prompt — durable lessons across runs. `/feedback --clear` empties it.
 
+### Use with dario (Claude Max subscription / multi-provider)
+
+[dario](https://github.com/askalf/dario) is a local LLM router that exposes one Anthropic-compatible endpoint at `http://localhost:3456` and routes requests to your Claude Max subscription (via OAuth, no per-token API billing) or to any of OpenAI / Groq / OpenRouter / Ollama / LiteLLM as a backend.
+
+arnie speaks to it directly — set the base URL and you're done:
+
+```sh
+# install + log in once
+npm install -g @askalf/dario
+dario login
+dario proxy &
+
+# point arnie at it
+arnie --dario        # short form: sets http://localhost:3456 + dummy key
+# or
+arnie --base-url http://localhost:3456
+# or
+ANTHROPIC_BASE_URL=http://localhost:3456 ANTHROPIC_API_KEY=dario arnie
+```
+
+When `--dario` is on, the banner shows `base url: http://localhost:3456 (via --dario)`. Everything else — tools, slash commands, sessions, memory — is unchanged. Switch backends in dario by changing the model name passed via `--model`.
+
 ### Spillover output
 
 When a shell command produces more than 100KB of output, the truncated portion goes to disk under the OS temp dir, and the path is returned in `stdout_full_path`/`stderr_full_path`. The model can read it back via `read_file` to inspect specific portions without flooding the context.
