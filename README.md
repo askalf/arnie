@@ -99,6 +99,8 @@ arnie> [reads the SMB error, investigates...]
 | `disk_check` | Per-drive total/used/free GB and percent used (`Get-PSDrive` / `df`). |
 | `apply_patch` | Apply a unified-diff patch (with `@@` hunk headers) to a file. Better than `edit_file` for 4+ changes in one file. Confirms with colored preview. |
 | `monitor` | Run a shell command N times on an interval; only iterations where output changed are returned. Bounded (max 30 iters, max 60s apart). |
+| `event_log` | Recent system events (Windows: `Get-WinEvent`; Linux: `journalctl`). Filter by level / source / time window. |
+| `registry_read` | Windows registry inspection. Path must start with `HKLM`/`HKCU`/`HKCR`/`HKU`/`HKCC`. Reads values + immediate subkeys (or recursive). |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 

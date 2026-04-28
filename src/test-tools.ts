@@ -1575,6 +1575,49 @@ async function urlAttachTests(): Promise<void> {
   }
 }
 
+async function eventLogTests(): Promise<void> {
+  const { runEventLog } = await import("./tools/eventLog.js");
+  // Best-effort: Windows machine should have System events; Linux likely has journalctl
+  const r = await runEventLog({ level: "info", since_minutes: 60, max_entries: 5 });
+  cases.push({
+    name: "event_log: returns ok with shape",
+    pass: r.ok && Array.isArray(r.entries),
+    detail: r.ok ? `${r.entries.length} entries` : `error: ${r.error}`,
+  });
+}
+
+async function registryReadTests(): Promise<void> {
+  const { runRegistryRead } = await import("./tools/registryRead.js");
+  if (process.platform !== "win32") {
+    const r = await runRegistryRead({ path: "HKLM\\SOFTWARE" });
+    cases.push({
+      name: "registry_read: refuses on non-Windows",
+      pass: !r.ok && r.error !== undefined && r.error.includes("Windows-only"),
+      detail: r.error ?? "expected Windows-only error",
+    });
+    return;
+  }
+
+  // Reject obviously bogus hive
+  const bogus = await runRegistryRead({ path: "BOGUS\\foo" });
+  cases.push({
+    name: "registry_read: rejects bad hive",
+    pass: !bogus.ok && bogus.error !== undefined && bogus.error.includes("must start with"),
+    detail: bogus.error ?? "expected hive error",
+  });
+
+  // Read a well-known stable Windows key
+  const ok = await runRegistryRead({
+    path: "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+    value: "ProductName",
+  });
+  cases.push({
+    name: "registry_read: reads a known value",
+    pass: ok.ok && ok.entries.length === 1 && typeof ok.entries[0].values["ProductName"] === "string",
+    detail: ok.ok ? `ProductName=${ok.entries[0].values["ProductName"]}` : `error: ${ok.error}`,
+  });
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -1618,6 +1661,8 @@ async function main(): Promise<void> {
   await dryRunTests();
   await monitorTests();
   await urlAttachTests();
+  await eventLogTests();
+  await registryReadTests();
 
   console.log();
   console.log("=".repeat(70));

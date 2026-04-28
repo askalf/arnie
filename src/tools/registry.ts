@@ -30,6 +30,8 @@ import { PROCESS_CHECK_TOOL_DEFINITION, runProcessCheck } from "./processCheck.j
 import { DISK_CHECK_TOOL_DEFINITION, runDiskCheck } from "./diskCheck.js";
 import { APPLY_PATCH_TOOL_DEFINITION, runApplyPatch } from "./applyPatch.js";
 import { MONITOR_TOOL_DEFINITION, runMonitor } from "./monitor.js";
+import { EVENT_LOG_TOOL_DEFINITION, runEventLog } from "./eventLog.js";
+import { REGISTRY_READ_TOOL_DEFINITION, runRegistryRead } from "./registryRead.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -133,6 +135,19 @@ const monitorSchema = z.object({
   reason: z.string().optional(),
 });
 
+const eventLogSchema = z.object({
+  source: z.string().optional(),
+  level: z.enum(["error", "warning", "info", "all"]).optional(),
+  max_entries: z.number().int().min(1).max(100).optional(),
+  since_minutes: z.number().int().min(1).optional(),
+});
+
+const registryReadSchema = z.object({
+  path: z.string().min(1),
+  value: z.string().optional(),
+  recursive: z.boolean().optional(),
+});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -163,6 +178,8 @@ const HANDLERS: Record<string, ToolHandler> = {
   disk_check: { schema: diskCheckSchema, run: (i) => runDiskCheck(i as z.infer<typeof diskCheckSchema>) },
   apply_patch: { schema: applyPatchSchema, run: (i) => runApplyPatch(i as z.infer<typeof applyPatchSchema>) },
   monitor: { schema: monitorSchema, run: (i) => runMonitor(i as z.infer<typeof monitorSchema>) },
+  event_log: { schema: eventLogSchema, run: (i) => runEventLog(i as z.infer<typeof eventLogSchema>) },
+  registry_read: { schema: registryReadSchema, run: (i) => runRegistryRead(i as z.infer<typeof registryReadSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -188,6 +205,8 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     DISK_CHECK_TOOL_DEFINITION,
     APPLY_PATCH_TOOL_DEFINITION,
     MONITOR_TOOL_DEFINITION,
+    EVENT_LOG_TOOL_DEFINITION,
+    REGISTRY_READ_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);
@@ -209,6 +228,8 @@ const PARALLEL_SAFE = new Set([
   "tail_log",
   "process_check",
   "disk_check",
+  "event_log",
+  "registry_read",
 ]);
 
 export function isParallelSafe(name: string): boolean {
