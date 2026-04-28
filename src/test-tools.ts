@@ -1164,7 +1164,7 @@ async function sandboxTests(): Promise<void> {
   const r2 = await runReadFile({ path: allowedFile });
   cases.push({
     name: "sandbox: read_file allows inside path",
-    pass: r2.ok === true && r2.content?.includes("ok content"),
+    pass: r2.ok === true && r2.content !== undefined && r2.content.includes("ok content"),
     detail: r2.ok ? "ok" : `error: ${r2.error}`,
   });
 
@@ -1295,6 +1295,88 @@ async function jobNotificationTests(): Promise<void> {
   });
 }
 
+async function tailLogTests(): Promise<void> {
+  const { runTailLog } = await import("./tools/tailLog.js");
+  const tmpDir = path.join(os.tmpdir(), `arnie-tail-${Date.now()}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const file = path.join(tmpDir, "app.log");
+  const content = Array.from({ length: 50 }, (_, i) => `line-${i + 1} ${i % 7 === 0 ? "ERROR" : "info"}`).join("\n");
+  await fs.writeFile(file, content, "utf8");
+
+  const r1 = await runTailLog({ path: file, lines: 5 });
+  cases.push({
+    name: "tail_log: returns last N lines",
+    pass: r1.ok && r1.lines_returned === 5 && (r1.content ?? "").split("\n").pop()?.startsWith("line-50") === true,
+    detail: `${r1.lines_returned} lines, last="${(r1.content ?? "").split("\n").pop()}"`,
+  });
+
+  const r2 = await runTailLog({ path: file, lines: 10, filter: "ERROR" });
+  cases.push({
+    name: "tail_log: regex filter narrows",
+    pass: r2.ok && (r2.content ?? "").split("\n").every((l) => l.includes("ERROR")),
+    detail: `${r2.lines_returned} matched`,
+  });
+
+  const r3 = await runTailLog({ path: file, filter: "[" });
+  cases.push({
+    name: "tail_log: invalid regex returns error",
+    pass: !r3.ok && r3.error !== undefined && r3.error.includes("invalid filter"),
+    detail: r3.error ?? "expected error",
+  });
+
+  const r4 = await runTailLog({ path: path.join(tmpDir, "missing.log") });
+  cases.push({
+    name: "tail_log: missing file returns error",
+    pass: !r4.ok && r4.error !== undefined,
+    detail: r4.error ?? "expected error",
+  });
+
+  await fs.rm(tmpDir, { recursive: true, force: true });
+}
+
+async function processCheckTests(): Promise<void> {
+  const { runProcessCheck } = await import("./tools/processCheck.js");
+  const r1 = await runProcessCheck({ top: 5 });
+  cases.push({
+    name: "process_check: returns rows",
+    pass: r1.ok && r1.rows.length > 0 && r1.rows.length <= 5,
+    detail: r1.ok ? `${r1.rows.length} rows` : `error: ${r1.error}`,
+  });
+
+  // Filter to just the running node process (this very test)
+  const r2 = await runProcessCheck({ pid: process.pid });
+  cases.push({
+    name: "process_check: pid filter finds self",
+    pass: r2.ok && r2.rows.some((r) => r.pid === process.pid),
+    detail: r2.ok ? `${r2.rows.length} rows; self pid=${process.pid}` : `error: ${r2.error}`,
+  });
+
+  const r3 = await runProcessCheck({ name: "this-process-does-not-exist-xyz123" });
+  cases.push({
+    name: "process_check: bogus name returns empty",
+    pass: r3.ok && r3.rows.length === 0,
+    detail: `${r3.rows.length} rows`,
+  });
+}
+
+async function diskCheckTests(): Promise<void> {
+  const { runDiskCheck } = await import("./tools/diskCheck.js");
+  const r1 = await runDiskCheck({});
+  cases.push({
+    name: "disk_check: returns drives",
+    pass: r1.ok && r1.rows.length > 0 && r1.rows.every((d) => d.total_gb >= 0 && d.percent_used >= 0 && d.percent_used <= 100),
+    detail: r1.ok ? `${r1.rows.length} drive(s)` : `error: ${r1.error}`,
+  });
+
+  const cwdDrive = process.platform === "win32" ? "C:\\" : "/";
+  const r2 = await runDiskCheck({ path: cwdDrive });
+  cases.push({
+    name: "disk_check: path filter narrows",
+    pass: r2.ok && r2.rows.length >= 1,
+    detail: `${r2.rows.length} matched`,
+  });
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -1331,6 +1413,9 @@ async function main(): Promise<void> {
   await feedbackTests();
   budgetTests();
   await jobNotificationTests();
+  await tailLogTests();
+  await processCheckTests();
+  await diskCheckTests();
 
   console.log();
   console.log("=".repeat(70));

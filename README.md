@@ -94,6 +94,9 @@ arnie> [reads the SMB error, investigates...]
 | `grep` | Regex search across files (skips node_modules/.git/dist; supports glob, context lines, literal mode). |
 | `network_check` | Ping + optional TCP port probe. Cross-platform wrapper. |
 | `service_check` | List Windows services / Linux systemd units with status. |
+| `tail_log` | Last N lines of a file with optional regex filter — cheaper than `read_file` for large logs. |
+| `process_check` | Cross-platform process listing (PID, name, CPU, memory) with name/pid filter and sort. |
+| `disk_check` | Per-drive total/used/free GB and percent used (`Get-PSDrive` / `df`). |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 

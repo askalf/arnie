@@ -24,6 +24,9 @@ import {
   runServiceCheck,
 } from "./netCheck.js";
 import { SUBAGENT_TOOL_DEFINITION, runSubagent } from "./subagent.js";
+import { TAIL_LOG_TOOL_DEFINITION, runTailLog } from "./tailLog.js";
+import { PROCESS_CHECK_TOOL_DEFINITION, runProcessCheck } from "./processCheck.js";
+import { DISK_CHECK_TOOL_DEFINITION, runDiskCheck } from "./diskCheck.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -96,6 +99,24 @@ const subagentSchema = z.object({
   model: z.string().optional(),
 });
 
+const tailLogSchema = z.object({
+  path: z.string().min(1),
+  lines: z.number().int().min(1).max(5000).optional(),
+  filter: z.string().optional(),
+  case_insensitive: z.boolean().optional(),
+});
+
+const processCheckSchema = z.object({
+  name: z.string().optional(),
+  pid: z.number().int().min(1).optional(),
+  sort_by: z.enum(["cpu", "memory", "name"]).optional(),
+  top: z.number().int().min(1).max(200).optional(),
+});
+
+const diskCheckSchema = z.object({
+  path: z.string().optional(),
+});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -121,6 +142,9 @@ const HANDLERS: Record<string, ToolHandler> = {
     schema: subagentSchema,
     run: (i, ctx) => runSubagent(i as z.infer<typeof subagentSchema>, ctx.client),
   },
+  tail_log: { schema: tailLogSchema, run: (i) => runTailLog(i as z.infer<typeof tailLogSchema>) },
+  process_check: { schema: processCheckSchema, run: (i) => runProcessCheck(i as z.infer<typeof processCheckSchema>) },
+  disk_check: { schema: diskCheckSchema, run: (i) => runDiskCheck(i as z.infer<typeof diskCheckSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -141,6 +165,9 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     SHELL_KILL_TOOL_DEFINITION,
     NETWORK_CHECK_TOOL_DEFINITION,
     SERVICE_CHECK_TOOL_DEFINITION,
+    TAIL_LOG_TOOL_DEFINITION,
+    PROCESS_CHECK_TOOL_DEFINITION,
+    DISK_CHECK_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);
@@ -159,6 +186,9 @@ const PARALLEL_SAFE = new Set([
   "service_check",
   "shell_status",
   "subagent",
+  "tail_log",
+  "process_check",
+  "disk_check",
 ]);
 
 export function isParallelSafe(name: string): boolean {
