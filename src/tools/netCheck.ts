@@ -148,7 +148,9 @@ export async function runServiceCheck(input: ServiceCheckInput): Promise<Service
           ? "Where-Object { $_.Status -eq 'Stopped' }"
           : "";
     const namePart = input.name ? `-Name '${input.name.replace(/'/g, "''")}*' ` : "";
-    const ps = `Get-Service ${namePart}${filterClause ? "| " + filterClause : ""} | Select-Object -First 100 Name, Status, DisplayName, StartType | ConvertTo-Json -Compress`;
+    // Project Status/StartType into their readable string representations up
+    // front so we never end up returning bare enum numbers like "4" to the model.
+    const ps = `Get-Service ${namePart}${filterClause ? "| " + filterClause : ""} | Select-Object -First 100 Name, @{N='Status';E={$_.Status.ToString()}}, DisplayName, @{N='StartType';E={if ($_.StartType) { $_.StartType.ToString() } else { '' }}} | ConvertTo-Json -Compress`;
     const r = await spawnCapture("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", ps]);
     const out = (r.stdout || "").trim();
     if (r.code !== 0 && !out) {
@@ -163,13 +165,11 @@ export async function runServiceCheck(input: ServiceCheckInput): Promise<Service
     const arr = Array.isArray(parsed) ? parsed : [parsed];
     const rows: ServiceCheckRow[] = arr.map((s: unknown) => {
       const o = s as Record<string, unknown>;
-      const status = o.Status;
-      const start = o.StartType;
       return {
         name: String(o.Name ?? ""),
-        status: typeof status === "object" && status !== null ? String((status as { value?: unknown }).value ?? status) : String(status ?? ""),
+        status: String(o.Status ?? ""),
         display_name: o.DisplayName ? String(o.DisplayName) : undefined,
-        start_type: typeof start === "object" && start !== null ? String((start as { value?: unknown }).value ?? start) : start !== undefined ? String(start) : undefined,
+        start_type: o.StartType ? String(o.StartType) : undefined,
       };
     });
     log(chalk.dim(`  ${rows.length} services`));
