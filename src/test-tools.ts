@@ -727,7 +727,8 @@ function parallelSafeTests(): void {
       isParallelSafe("network_check") &&
       isParallelSafe("service_check") &&
       isParallelSafe("subagent") &&
-      isParallelSafe("shell_status"),
+      isParallelSafe("shell_status") &&
+      isParallelSafe("firewall_check"),
     detail: "all read-only tools parallel-safe",
   });
   cases.push({
@@ -1586,6 +1587,48 @@ async function eventLogTests(): Promise<void> {
   });
 }
 
+async function firewallCheckTests(): Promise<void> {
+  const { runFirewallCheck } = await import("./tools/firewallCheck.js");
+
+  // Profile-only call: should return ok with at least one profile on supported platforms
+  const r = await runFirewallCheck({});
+  if (process.platform === "win32" || process.platform === "linux" || process.platform === "darwin") {
+    cases.push({
+      name: "firewall_check: returns ok with profiles",
+      pass: r.ok && Array.isArray(r.profiles) && r.profiles.length > 0,
+      detail: r.ok ? `${r.profiles.length} profile(s): ${r.profiles.map((p) => `${p.name}=${p.enabled}`).join(",")}` : `error: ${r.error}`,
+    });
+    cases.push({
+      name: "firewall_check: rules omitted when not requested",
+      pass: r.rules === undefined,
+      detail: r.rules === undefined ? "ok" : `unexpected rules array of ${r.rules.length}`,
+    });
+  } else {
+    cases.push({
+      name: "firewall_check: refuses on unsupported platform",
+      pass: !r.ok && r.error !== undefined,
+      detail: r.error ?? "expected platform error",
+    });
+    return;
+  }
+
+  // Rules call: should populate .rules (may be empty if no rules match, but must be an array)
+  const rWithRules = await runFirewallCheck({ rules: true, enabled_only: true });
+  cases.push({
+    name: "firewall_check: rules array shape when requested",
+    pass: rWithRules.ok && Array.isArray(rWithRules.rules),
+    detail: rWithRules.ok ? `${rWithRules.rules?.length ?? 0} rule(s)` : `error: ${rWithRules.error}`,
+  });
+
+  // Direction filter: ensure no error and structurally valid
+  const rOut = await runFirewallCheck({ rules: true, direction: "outbound" });
+  cases.push({
+    name: "firewall_check: direction filter accepted",
+    pass: rOut.ok && Array.isArray(rOut.rules),
+    detail: rOut.ok ? `${rOut.rules?.length ?? 0} outbound rule(s)` : `error: ${rOut.error}`,
+  });
+}
+
 async function registryReadTests(): Promise<void> {
   const { runRegistryRead } = await import("./tools/registryRead.js");
   if (process.platform !== "win32") {
@@ -1663,6 +1706,7 @@ async function main(): Promise<void> {
   await urlAttachTests();
   await eventLogTests();
   await registryReadTests();
+  await firewallCheckTests();
 
   console.log();
   console.log("=".repeat(70));

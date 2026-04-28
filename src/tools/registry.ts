@@ -32,6 +32,7 @@ import { APPLY_PATCH_TOOL_DEFINITION, runApplyPatch } from "./applyPatch.js";
 import { MONITOR_TOOL_DEFINITION, runMonitor } from "./monitor.js";
 import { EVENT_LOG_TOOL_DEFINITION, runEventLog } from "./eventLog.js";
 import { REGISTRY_READ_TOOL_DEFINITION, runRegistryRead } from "./registryRead.js";
+import { FIREWALL_CHECK_TOOL_DEFINITION, runFirewallCheck } from "./firewallCheck.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -148,6 +149,13 @@ const registryReadSchema = z.object({
   recursive: z.boolean().optional(),
 });
 
+const firewallCheckSchema = z.object({
+  rules: z.boolean().optional(),
+  name: z.string().optional(),
+  direction: z.enum(["inbound", "outbound", "all"]).optional(),
+  enabled_only: z.boolean().optional(),
+});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -180,6 +188,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   monitor: { schema: monitorSchema, run: (i) => runMonitor(i as z.infer<typeof monitorSchema>) },
   event_log: { schema: eventLogSchema, run: (i) => runEventLog(i as z.infer<typeof eventLogSchema>) },
   registry_read: { schema: registryReadSchema, run: (i) => runRegistryRead(i as z.infer<typeof registryReadSchema>) },
+  firewall_check: { schema: firewallCheckSchema, run: (i) => runFirewallCheck(i as z.infer<typeof firewallCheckSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -207,6 +216,7 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     MONITOR_TOOL_DEFINITION,
     EVENT_LOG_TOOL_DEFINITION,
     REGISTRY_READ_TOOL_DEFINITION,
+    FIREWALL_CHECK_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);
@@ -230,6 +240,7 @@ const PARALLEL_SAFE = new Set([
   "disk_check",
   "event_log",
   "registry_read",
+  "firewall_check",
 ]);
 
 export function isParallelSafe(name: string): boolean {

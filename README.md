@@ -101,6 +101,7 @@ arnie> [reads the SMB error, investigates...]
 | `monitor` | Run a shell command N times on an interval; only iterations where output changed are returned. Bounded (max 30 iters, max 60s apart). |
 | `event_log` | Recent system events (Windows: `Get-WinEvent`; Linux: `journalctl`). Filter by level / source / time window. |
 | `registry_read` | Windows registry inspection. Path must start with `HKLM`/`HKCU`/`HKCR`/`HKU`/`HKCC`. Reads values + immediate subkeys (or recursive). |
+| `firewall_check` | Inspect host firewall state. Windows: `Get-NetFirewallProfile` + optional `Get-NetFirewallRule`. Linux: ufw → firewalld → iptables. macOS: `socketfilterfw`. Default returns just profile state; pass `rules=true` for the rule list (capped at 200). |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 
