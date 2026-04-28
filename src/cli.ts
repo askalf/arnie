@@ -34,7 +34,7 @@ import { loadFeedback, feedbackPath } from "./feedback.js";
 import { handleApiError } from "./apiError.js";
 import { handleSlashCommand, type SlashContext } from "./slashCommands.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;
@@ -223,6 +223,15 @@ async function runPrintMode(ctx: TurnContext, message: string): Promise<void> {
   await ctx.transcript.appendUser(message);
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: message }];
   await runTurn(ctx, messages);
+  // The single turn has already executed by the time we get here, so we
+  // can't *prevent* the spend — but cron/script users still need a signal.
+  // Warn to stderr and exit non-zero so wrappers can react.
+  if (ctx.config.budgetUsd && ctx.totals.costUsd >= ctx.config.budgetUsd) {
+    console.error(chalk.yellow(
+      `budget exceeded: $${ctx.totals.costUsd.toFixed(4)} ≥ $${ctx.config.budgetUsd.toFixed(4)}`,
+    ));
+    process.exitCode = 1;
+  }
 }
 
 async function main(): Promise<void> {
@@ -431,7 +440,8 @@ async function main(): Promise<void> {
     await runPrintMode(ctx, config.printMessage);
     await transcript.endSession();
     closeReadline();
-    process.exit(0);
+    // No-arg form honors process.exitCode (set by runPrintMode on budget overrun).
+    process.exit();
   }
 
   process.stdout.write(BANNER);

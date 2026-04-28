@@ -64,10 +64,10 @@ arnie> [reads the SMB error, investigates...]
 | Command | Purpose |
 | --- | --- |
 | `/help` | Show REPL help |
-| `/usage` | Show session token totals + estimated cost |
-| `/clear` | Reset the conversation |
+| `/usage` | Session token totals + estimated cost. `/usage tools` for per-tool call counts and durations. |
+| `/clear` | Reset the conversation. `/clear --summary` replaces history with a model-written summary instead of wiping it. |
 | `/tools` | List registered tools |
-| `/jobs` | List background shell jobs |
+| `/jobs` | List background shell jobs. `/jobs --watch` blocks until they all finish. |
 | `/skills` | List discovered skills |
 | `/memory` | Show loaded memory files |
 | `/remember <fact>` | Append a dated line to `.arnie/memory.md` |
@@ -75,9 +75,15 @@ arnie> [reads the SMB error, investigates...]
 | `/save <name>` | Save the current conversation |
 | `/load <name>` | Replace the current conversation with a saved one |
 | `/list` | List saved sessions |
+| `/find <query>` | Search across saved sessions for a substring; shows session, message index, snippet |
 | `/export <name>` | Export the current conversation as Markdown to `~/.arnie/exports/<name>.md` |
+| `/replay <transcript.jsonl>` | Reconstruct the conversation from a transcript file |
+| `/init` | Bootstrap a `.arnie/memory.md` for this machine — model probes the box and proposes one |
+| `/settings` | Show effective settings. `/settings <key> <value>` sets and persists to `~/.arnie/settings.json`. |
+| `/profile` | Show effective model + thinking/effort/budget profile |
+| `/feedback "note"` | Append a dated note to `~/.arnie/feedback.md` (loaded into the system prompt next session). `/feedback --clear` empties it. |
 | `/plan` | Toggle plan mode — model proposes a plan first and awaits approval before mutating tools |
-| `/exit` | Quit (or Ctrl+C twice) |
+| `/exit` (or `/quit`) | Quit (or Ctrl+C twice) |
 
 ### Tools the model can use
 
@@ -107,9 +113,15 @@ arnie> [reads the SMB error, investigates...]
 
 ### Cross-session memory
 
-If `.arnie/memory.md` exists in the current directory or `~/.arnie/memory.md` exists in your home directory, the contents are loaded into the system prompt at startup. Use it for stable, cross-session context — *"this network uses 10.0.0.0/8, AD DC is at 10.0.0.5, all servers run Server 2022"*. Cheaper than re-explaining it every session.
+Memory files are loaded into the system prompt at startup. Arnie checks three locations, in order, and merges them:
 
-Append new facts on the fly with `/remember <fact>` — appends a dated line to `.arnie/memory.md`.
+- `~/.arnie/memory.md` — global, all projects
+- `.arnie/memory.md` — project-scoped (current cwd)
+- `ARNIE.md` — project-scoped, top-level alias if you don't want a hidden `.arnie/` dir
+
+Use it for stable, cross-session context — *"this network uses 10.0.0.0/8, AD DC is at 10.0.0.5, all servers run Server 2022"*. Cheaper than re-explaining it every session.
+
+Append new facts on the fly with `/remember <fact>` — appends a dated line to `.arnie/memory.md`. Or run `/init` and let the model probe the machine and write one for you.
 
 ### Skills
 
@@ -205,9 +217,10 @@ Servers are passed through to the API's `mcp_servers` parameter; tool discovery,
 
 ### Image and file attachments
 
-Inside a user message, you can attach files two ways:
+Inside a user message, you can attach files four ways:
 
 - `@path/to/file` — bare-token reference, like Claude Code. Auto-attaches if the file exists.
+- `@path/with/*.glob` — auto-attach every file matching the glob (e.g. `@src/**/*.ts`).
 - `attach <path>` — explicit form, useful if the path contains spaces or unusual characters.
 - `@<url>` — fetch a `http://` or `https://` URL and attach the body. Image content-types become image blocks; everything else is treated as text. Capped at 2MB and 15s.
 
@@ -216,6 +229,7 @@ Supported images: jpg/png/gif/webp (max 8MB). Other files are read as text (max 
 ```
 you> what's this dialog box telling me? @C:\Users\me\Desktop\error.png
 you> review @src/auth.ts and look for issues
+you> any obvious smells in @src/**/*.ts ?
 ```
 
 ### Output redactors
@@ -262,6 +276,12 @@ arnie --dry-run
 ### Cost budget
 
 `--budget 5.00` halts the session when the running cost exceeds $5.00. Useful for unattended runs.
+
+In `--print` mode (one-shot), the request has already executed by the time the budget is checked, so it can't pre-empt the spend. Instead arnie warns to stderr and exits with a non-zero status, so cron/script wrappers can react:
+
+```sh
+arnie --budget 0.05 --print "diagnose disk i/o" || echo "spent more than 5¢"
+```
 
 ### Auto-checkpoint
 
@@ -337,12 +357,23 @@ Available env vars in hook commands: `ARNIE_TOOL_NAME`, `ARNIE_TOOL_INPUT` (JSON
 --no-memory             Don't load .arnie/memory.md or ARNIE.md
 --no-permissions        Ignore .arnie/permissions.json
 --no-hooks              Ignore .arnie/hooks.json
+--no-mcp                Ignore .arnie/mcp.json (skip remote MCP servers)
+--no-sandbox            Ignore .arnie/sandbox.json path restrictions
 --no-status-line        Don't render the status line
 --no-markdown           Don't render markdown (raw output)
 --no-transcript         Don't write a session transcript
 --transcript-dir <dir>  Transcript directory (default: ~/.arnie/transcripts)
 --no-usage              Hide per-turn token/cost display
+-q, --quiet             Suppress tool execution chatter; only show responses
+--voice                 Speak assistant responses (espeak / `say` / PowerShell SAPI)
 --system-extra <text>   Append text to the system prompt
+--dry-run               Investigation only — mutating tools refuse
+--budget <usd>          Halt the session after exceeding $N in tokens
+                        (in --print mode: warn + exit non-zero, can't pre-empt)
+--auto-checkpoint <n>   Auto-save the session every N user turns
+--base-url <url>        Anthropic-compat endpoint (overrides ANTHROPIC_BASE_URL)
+--dario                 Route through a local dario proxy at http://localhost:3456
+                        (sets base URL + dummy API key if not already set)
 --resume [name]         Resume a saved session (most recent if no name)
 -p, --print <msg>       Run a single non-interactive turn and exit
 --init                  Scaffold .arnie/ in current cwd and exit
