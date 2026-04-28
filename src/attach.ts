@@ -202,11 +202,16 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
     return result;
   }
 
-  // URL blocks come first; file attaches and remaining text follow
+  // URL blocks come first; file attaches and remaining text follow.
+  // Each file is opened once and statted through the handle so the type
+  // check and the read both target the same inode — closes the symlink-
+  // swap TOCTOU window between `fs.stat(p)` and `fs.readFile(p)`.
   for (const match of matches) {
     const target = path.resolve(match.pathArg);
+    let fh: fs.FileHandle | undefined;
     try {
-      const stat = await fs.stat(target);
+      fh = await fs.open(target, "r");
+      const stat = await fh.stat();
       if (!stat.isFile()) {
         result.errors.push(`attach failed: ${target} is not a file`);
         continue;
@@ -218,7 +223,7 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
           result.errors.push(`attach failed: ${target} exceeds 8MB limit`);
           continue;
         }
-        const data = (await fs.readFile(target)).toString("base64");
+        const data = (await fh.readFile()).toString("base64");
         result.blocks.push({
           type: "image",
           source: { type: "base64", media_type: mime, data },
@@ -230,7 +235,7 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
           result.errors.push(`attach failed: ${target} exceeds 200KB limit (use read_file for larger files)`);
           continue;
         }
-        const text = await fs.readFile(target, "utf8");
+        const text = (await fh.readFile()).toString("utf8");
         result.blocks.push({
           type: "text",
           text: `--- attached file: ${target} ---\n${text}\n--- end of ${path.basename(target)} ---`,
@@ -240,6 +245,8 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
       }
     } catch (err) {
       result.errors.push(`attach failed: ${match.pathArg} — ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      await fh?.close();
     }
   }
 

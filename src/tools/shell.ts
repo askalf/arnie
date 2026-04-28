@@ -20,9 +20,12 @@ const SPILLOVER_THRESHOLD_BYTES = 100_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 async function spillover(name: string, content: string): Promise<string> {
-  const dir = path.join(os.tmpdir(), "arnie-spillover");
-  await fs.mkdir(dir, { recursive: true });
-  const file = path.join(dir, `${Date.now()}-${name}.log`);
+  // Each spillover call gets a fresh randomized subdirectory rather than a
+  // shared `arnie-spillover/` with a Date.now()-based filename. Predictable
+  // names invite symlink-race attacks on multi-user boxes; mkdtemp uses
+  // OS-level random suffixes and creates the dir atomically with mode 0700.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-spillover-"));
+  const file = path.join(dir, `${name}.log`);
   await fs.writeFile(file, content, "utf8");
   return file;
 }

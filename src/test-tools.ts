@@ -275,7 +275,7 @@ function usageTests(): void {
 }
 
 async function transcriptTests(): Promise<void> {
-  const tmpDir = path.join(os.tmpdir(), `arnie-test-${Date.now()}`);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-test-"));
   const t = createTranscriptWriter({ enabled: true, dir: tmpDir });
   await t.startSession({ model: "test", cwd: process.cwd(), hostname: "test", user: "test" });
   await t.appendUser("hello");
@@ -303,8 +303,7 @@ async function transcriptTests(): Promise<void> {
 }
 
 async function grepTests(): Promise<void> {
-  const tmp = path.join(os.tmpdir(), `arnie-grep-${Date.now()}`);
-  await fs.mkdir(tmp, { recursive: true });
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-grep-"));
   await fs.writeFile(path.join(tmp, "a.log"), "INFO start\nERROR boom\nWARN slow\nERROR retry\n", "utf8");
   await fs.writeFile(path.join(tmp, "b.txt"), "nothing useful here\n", "utf8");
   await fs.mkdir(path.join(tmp, "node_modules"), { recursive: true });
@@ -541,8 +540,7 @@ async function editFileTests(): Promise<void> {
   // Test the validation paths that don't require user input.
 
   // identical strings
-  const tmpDir = path.join(os.tmpdir(), `arnie-edit-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-edit-"));
   const target = path.join(tmpDir, "f.txt");
   await fs.writeFile(target, "hello world\nhello again\nfoo\n", "utf8");
 
@@ -659,8 +657,7 @@ Body content.
 }
 
 async function initTests(): Promise<void> {
-  const tmpDir = path.join(os.tmpdir(), `arnie-init-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-init-"));
   const result = await initWorkspace(tmpDir);
   cases.push({
     name: "init: creates expected files",
@@ -937,8 +934,7 @@ async function attachTests(): Promise<void> {
   });
 
   // attach a text file
-  const tmpDir = path.join(os.tmpdir(), `arnie-attach-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-attach-"));
   const txt = path.join(tmpDir, "note.txt");
   await fs.writeFile(txt, "hello attached file", "utf8");
   const r2 = await parseInput(`look at this:\nattach ${txt}`);
@@ -1021,8 +1017,7 @@ async function quietLogTests(): Promise<void> {
 
 async function atRefTests(): Promise<void> {
   const { parseInput } = await import("./attach.js");
-  const tmpDir = path.join(os.tmpdir(), `arnie-at-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-at-"));
   const target = path.join(tmpDir, "ref.txt");
   await fs.writeFile(target, "content via @ref", "utf8");
 
@@ -1085,7 +1080,8 @@ async function spilloverTests(): Promise<void> {
   // verifying that ShellResult fields exist when the spawned output is small
   // enough to NOT spill (already covered by shellTests). For coverage, write
   // a separate test that simulates spillover by calling fs APIs directly.
-  const tmp = path.join(os.tmpdir(), `arnie-spill-${Date.now()}.log`);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-spill-"));
+  const tmp = path.join(tmpDir, "spill.log");
   const big = "x".repeat(150_000);
   await fs.writeFile(tmp, big, "utf8");
   const stat = await fs.stat(tmp);
@@ -1102,7 +1098,7 @@ async function personaTests(): Promise<void> {
   const r1 = await loadPersonaOverride();
   cases.push({
     name: "persona: returns null when no override exists",
-    pass: r1 === null || (r1 !== null && typeof r1.text === "string"),
+    pass: r1 === null || typeof r1.text === "string",
     detail: r1 ? `loaded ${r1.source}` : "null",
   });
 
@@ -1126,10 +1122,8 @@ async function sandboxTests(): Promise<void> {
   const { runReadFile } = await import("./tools/readFile.js");
   const { runWriteFile } = await import("./tools/writeFile.js");
 
-  const allowedDir = path.join(os.tmpdir(), `arnie-sandbox-allow-${Date.now()}`);
-  const deniedDir = path.join(os.tmpdir(), `arnie-sandbox-deny-${Date.now()}`);
-  await fs.mkdir(allowedDir, { recursive: true });
-  await fs.mkdir(deniedDir, { recursive: true });
+  const allowedDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-sandbox-allow-"));
+  const deniedDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-sandbox-deny-"));
   const allowedFile = path.join(allowedDir, "ok.txt");
   const deniedFile = path.join(deniedDir, "nope.txt");
   await fs.writeFile(allowedFile, "ok content", "utf8");
@@ -1188,7 +1182,7 @@ async function sandboxTests(): Promise<void> {
 
 async function atGlobTests(): Promise<void> {
   const { parseInput } = await import("./attach.js");
-  const tmpDir = path.join(os.tmpdir(), `arnie-glob-${Date.now()}`);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-glob-"));
   await fs.mkdir(path.join(tmpDir, "sub"), { recursive: true });
   await fs.writeFile(path.join(tmpDir, "a.log"), "alpha", "utf8");
   await fs.writeFile(path.join(tmpDir, "b.log"), "beta", "utf8");
@@ -1302,8 +1296,7 @@ async function jobNotificationTests(): Promise<void> {
 
 async function tailLogTests(): Promise<void> {
   const { runTailLog } = await import("./tools/tailLog.js");
-  const tmpDir = path.join(os.tmpdir(), `arnie-tail-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-tail-"));
   const file = path.join(tmpDir, "app.log");
   const content = Array.from({ length: 50 }, (_, i) => `line-${i + 1} ${i % 7 === 0 ? "ERROR" : "info"}`).join("\n");
   await fs.writeFile(file, content, "utf8");
@@ -1385,8 +1378,7 @@ async function diskCheckTests(): Promise<void> {
 async function applyPatchTests(): Promise<void> {
   const { runApplyPatch } = await import("./tools/applyPatch.js");
 
-  const tmpDir = path.join(os.tmpdir(), `arnie-patch-${Date.now()}`);
-  await fs.mkdir(tmpDir, { recursive: true });
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "arnie-patch-"));
   const file = path.join(tmpDir, "f.txt");
 
   // Cases here exercise the validation paths that don't require user

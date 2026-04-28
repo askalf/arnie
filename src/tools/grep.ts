@@ -133,11 +133,13 @@ async function searchFile(
           collected += 1;
           if (pattern.test(next)) {
             out[matchIdx].context_after = after.slice(0, collected - 1);
+            // We're already inside `if (ctx > 0)`, so the conditional was
+            // a no-op — slice unconditionally.
             out.push({
               file,
               line: lineNum,
               text: next,
-              context_before: ctx > 0 ? buffer.slice(0, -1) : undefined,
+              context_before: buffer.slice(0, -1),
               context_after: undefined,
             });
             matchesFound += 1;

@@ -32,8 +32,13 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
     return { ok: false, path: resolved, bytes: 0, error: `sandbox denied: ${sb.reason}` };
   }
 
+  // Open the file once and stat through the handle so the type check and
+  // the read both target the same inode — avoids the symlink-swap TOCTOU
+  // window between `stat()` and a separate `readFile()`.
+  let fh: fs.FileHandle | undefined;
   try {
-    const stat = await fs.stat(resolved);
+    fh = await fs.open(resolved, "r");
+    const stat = await fh.stat();
     if (stat.isDirectory()) {
       return {
         ok: false,
@@ -43,7 +48,7 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
       };
     }
 
-    const buf = await fs.readFile(resolved);
+    const buf = await fh.readFile();
     let content = buf.toString("utf8");
     let truncated = false;
 
@@ -77,6 +82,8 @@ export async function runReadFile(input: ReadFileInput): Promise<ReadFileResult>
       bytes: 0,
       error: message,
     };
+  } finally {
+    await fh?.close();
   }
 }
 
