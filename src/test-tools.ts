@@ -1462,6 +1462,119 @@ async function dryRunTests(): Promise<void> {
   setDryRun(false);
 }
 
+async function monitorTests(): Promise<void> {
+  const { runMonitor } = await import("./tools/monitor.js");
+  const isWindows = process.platform === "win32";
+
+  // 3 iterations, 1s apart, command outputs an iso timestamp truncated to seconds
+  // Different every iteration → all 3 should be "changed"
+  const cmd = isWindows
+    ? "(Get-Date -Format \"yyyy-MM-ddTHH:mm:ss\")"
+    : "date -u +%Y-%m-%dT%H:%M:%S";
+  const r1 = await runMonitor({ command: cmd, iterations: 3, interval_seconds: 1 });
+  cases.push({
+    name: "monitor: changing output yields N change records",
+    pass: r1.ok && r1.iterations_with_changes.length >= 2 && r1.total_iterations === 3,
+    detail: `${r1.iterations_with_changes.length}/${r1.total_iterations} changed in ${r1.duration_ms}ms`,
+  });
+
+  // Constant output — only first iteration should record
+  const constCmd = isWindows ? "Write-Output 'constant'" : "echo constant";
+  const r2 = await runMonitor({ command: constCmd, iterations: 3, interval_seconds: 1 });
+  cases.push({
+    name: "monitor: constant output records only first",
+    pass: r2.ok && r2.iterations_with_changes.length === 1 && r2.iterations_with_changes[0].output.includes("constant"),
+    detail: `${r2.iterations_with_changes.length}/${r2.total_iterations} changed`,
+  });
+
+  // Sanity: 2 iterations of constant output, 1s apart
+  const r3 = await runMonitor({ command: constCmd, iterations: 2, interval_seconds: 1 });
+  cases.push({
+    name: "monitor: respects requested iteration count",
+    pass: r3.ok && r3.total_iterations === 2,
+    detail: `${r3.total_iterations} iters`,
+  });
+}
+
+async function urlAttachTests(): Promise<void> {
+  const { parseInput } = await import("./attach.js");
+
+  // Spin up a tiny HTTP server on a random localhost port
+  const http = await import("node:http");
+  const server = http.createServer((req, res) => {
+    if (req.url === "/text") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("hello-from-url-fetch");
+      return;
+    }
+    if (req.url === "/json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "json-body" }));
+      return;
+    }
+    if (req.url === "/big") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("X".repeat(3 * 1024 * 1024));
+      return;
+    }
+    if (req.url === "/404") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("not found");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("default");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addr = server.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
+
+  try {
+    const r1 = await parseInput(`look at @http://127.0.0.1:${port}/text and tell me`);
+    cases.push({
+      name: "@URL: fetches text URL",
+      pass:
+        r1.attachments.length === 1 &&
+        r1.attachments[0].type === "text" &&
+        r1.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("hello-from-url-fetch")),
+      detail: `${r1.attachments.length} attached, ${r1.errors.length} errors`,
+    });
+
+    const r2 = await parseInput(`@http://127.0.0.1:${port}/json`);
+    cases.push({
+      name: "@URL: fetches JSON as text",
+      pass:
+        r2.attachments.length === 1 &&
+        r2.blocks.some((b) => b.type === "text" && (b as { text: string }).text.includes("json-body")),
+      detail: `${r2.attachments.length} attached`,
+    });
+
+    const r3 = await parseInput(`@http://127.0.0.1:${port}/404`);
+    cases.push({
+      name: "@URL: 404 produces error",
+      pass: r3.attachments.length === 0 && r3.errors.length === 1 && r3.errors[0].includes("404"),
+      detail: r3.errors[0] ?? "expected 404 error",
+    });
+
+    const r4 = await parseInput(`@http://127.0.0.1:${port}/big`);
+    cases.push({
+      name: "@URL: oversized response rejected",
+      pass: r4.attachments.length === 0 && r4.errors.length === 1 && r4.errors[0].includes("exceeds"),
+      detail: r4.errors[0] ?? "expected size error",
+    });
+
+    // Plain text without @ — passes through, no fetch
+    const r5 = await parseInput("just talking about https://example.com here");
+    cases.push({
+      name: "@URL: bare URL (no @) is not fetched",
+      pass: r5.attachments.length === 0 && r5.errors.length === 0,
+      detail: "ok",
+    });
+  } finally {
+    server.close();
+  }
+}
+
 async function main(): Promise<void> {
   await readFileTests();
   await shellTests();
@@ -1503,6 +1616,8 @@ async function main(): Promise<void> {
   await diskCheckTests();
   await applyPatchTests();
   await dryRunTests();
+  await monitorTests();
+  await urlAttachTests();
 
   console.log();
   console.log("=".repeat(70));

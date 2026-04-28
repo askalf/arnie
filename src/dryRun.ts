@@ -7,6 +7,7 @@ const MUTATING_TOOLS = new Set([
   "write_file",
   "edit_file",
   "apply_patch",
+  "monitor",
 ]);
 
 export function setDryRun(value: boolean): void {

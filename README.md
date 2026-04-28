@@ -98,6 +98,7 @@ arnie> [reads the SMB error, investigates...]
 | `process_check` | Cross-platform process listing (PID, name, CPU, memory) with name/pid filter and sort. |
 | `disk_check` | Per-drive total/used/free GB and percent used (`Get-PSDrive` / `df`). |
 | `apply_patch` | Apply a unified-diff patch (with `@@` hunk headers) to a file. Better than `edit_file` for 4+ changes in one file. Confirms with colored preview. |
+| `monitor` | Run a shell command N times on an interval; only iterations where output changed are returned. Bounded (max 30 iters, max 60s apart). |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 
@@ -205,6 +206,7 @@ Inside a user message, you can attach files two ways:
 
 - `@path/to/file` — bare-token reference, like Claude Code. Auto-attaches if the file exists.
 - `attach <path>` — explicit form, useful if the path contains spaces or unusual characters.
+- `@<url>` — fetch a `http://` or `https://` URL and attach the body. Image content-types become image blocks; everything else is treated as text. Capped at 2MB and 15s.
 
 Supported images: jpg/png/gif/webp (max 8MB). Other files are read as text (max 200KB).
 

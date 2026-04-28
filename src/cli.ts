@@ -41,7 +41,7 @@ import { getUnannouncedFinishedJobs } from "./tools/backgroundShell.js";
 import { appendFeedback, loadFeedback, clearFeedback, feedbackPath } from "./feedback.js";
 import { snapshotTotals, deltaTotals } from "./usage.js";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 const COMPACT_BETA = "compact-2026-01-12";
 
 const PLAN_MODE_BLOCK = `Plan mode is active. Before calling any tool that mutates state (write_file, edit_file, shell that modifies the system, shell_background, shell_kill) or making non-trivial changes, propose a numbered plan and wait for the user's explicit approval (e.g. "ok", "go", "proceed"). Read-only investigation tools (read_file, list_dir, grep, network_check, service_check, shell_status, subagent, web_search) may be used freely to inform the plan. Once approved, execute the plan step by step, narrating progress.`;

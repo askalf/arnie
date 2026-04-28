@@ -26,7 +26,10 @@ const ATTACH_BLOCK_RE = /^attach\s+(.+)$/gim;
 // backslash, dot, dash, underscore, colon (Windows drive letters), and *,?,[
 // for glob patterns. Doesn't match emails — requires a non-@ char before.
 const AT_REF_RE = /(^|\s)@([A-Za-z]:[\\/][^\s@]*|[\w./\\*?[\]-][\w./\\:*?[\]-]*)/g;
+const AT_URL_RE = /(^|\s)@(https?:\/\/[^\s@]+)/g;
 const MAX_GLOB_MATCHES = 50;
+const MAX_URL_BYTES = 2 * 1024 * 1024;
+const URL_FETCH_TIMEOUT_MS = 15_000;
 
 function isGlob(s: string): boolean {
   return /[*?[]/.test(s);
@@ -98,6 +101,33 @@ async function expandGlob(pattern: string): Promise<string[]> {
   return results;
 }
 
+async function fetchUrl(url: string): Promise<{ kind: "image"; mime: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string; bytes: number } | { kind: "text"; text: string; bytes: number } | { kind: "error"; error: string }> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), URL_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+    if (!resp.ok) {
+      return { kind: "error", error: `HTTP ${resp.status} ${resp.statusText}` };
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > MAX_URL_BYTES) {
+      return { kind: "error", error: `response is ${buf.length} bytes — exceeds ${MAX_URL_BYTES} cap` };
+    }
+    const ct = (resp.headers.get("content-type") ?? "").toLowerCase();
+    if (ct.startsWith("image/")) {
+      const m = ct.match(/image\/(jpeg|jpg|png|gif|webp)/);
+      if (!m) return { kind: "error", error: `unsupported image type: ${ct}` };
+      const mime = (m[1] === "jpg" ? "jpeg" : m[1]) as "jpeg" | "png" | "gif" | "webp";
+      return { kind: "image", mime: `image/${mime}` as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: buf.toString("base64"), bytes: buf.length };
+    }
+    return { kind: "text", text: buf.toString("utf8"), bytes: buf.length };
+  } catch (err) {
+    return { kind: "error", error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function parseInput(rawText: string): Promise<ParsedInput> {
   const result: ParsedInput = { text: rawText, blocks: [], attachments: [], errors: [] };
 
@@ -108,10 +138,43 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
     matches.push({ full: m[0], pathArg: m[1].trim() });
   }
 
+  // @URL references — fetched and attached as image or text blocks
+  const urlBlocks: Anthropic.ContentBlockParam[] = [];
+  let remainingText = rawText;
+  AT_URL_RE.lastIndex = 0;
+  const urlMatches: { full: string; url: string }[] = [];
+  while ((m = AT_URL_RE.exec(rawText)) !== null) {
+    urlMatches.push({ full: `@${m[2]}`, url: m[2] });
+  }
+  for (const u of urlMatches) {
+    const r = await fetchUrl(u.url);
+    if (r.kind === "error") {
+      result.errors.push(`@${u.url}: ${r.error}`);
+      continue;
+    }
+    if (r.kind === "image") {
+      urlBlocks.push({
+        type: "image",
+        source: { type: "base64", media_type: r.mime, data: r.data },
+      });
+      result.attachments.push({ path: u.url, type: "image", bytes: r.bytes });
+      remainingText = remainingText.replace(u.full, `[fetched image: ${u.url}]`);
+    } else {
+      urlBlocks.push({
+        type: "text",
+        text: `--- fetched URL: ${u.url} ---\n${r.text.slice(0, MAX_TEXT_BYTES)}\n--- end of ${u.url} ---`,
+      });
+      result.attachments.push({ path: u.url, type: "text", bytes: r.bytes });
+      remainingText = remainingText.replace(u.full, `[fetched: ${u.url}]`);
+    }
+  }
+
   // @file references — attach if path exists, or expand globs.
   AT_REF_RE.lastIndex = 0;
   while ((m = AT_REF_RE.exec(rawText)) !== null) {
     const pathArg = m[2];
+    // skip URLs — already handled above
+    if (/^https?:\/\//.test(pathArg)) continue;
     if (isGlob(pathArg)) {
       const expanded = await expandGlob(pathArg);
       if (expanded.length > 0) {
@@ -134,12 +197,12 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
     }
   }
 
-  if (matches.length === 0) {
+  if (matches.length === 0 && urlBlocks.length === 0) {
     result.blocks.push({ type: "text", text: rawText });
     return result;
   }
 
-  let remainingText = rawText;
+  // URL blocks come first; file attaches and remaining text follow
   for (const match of matches) {
     const target = path.resolve(match.pathArg);
     try {
@@ -178,6 +241,11 @@ export async function parseInput(rawText: string): Promise<ParsedInput> {
     } catch (err) {
       result.errors.push(`attach failed: ${match.pathArg} — ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  // Prepend URL blocks before file blocks
+  if (urlBlocks.length > 0) {
+    result.blocks.unshift(...urlBlocks);
   }
 
   const trimmed = remainingText.trim();

@@ -29,6 +29,7 @@ import { TAIL_LOG_TOOL_DEFINITION, runTailLog } from "./tailLog.js";
 import { PROCESS_CHECK_TOOL_DEFINITION, runProcessCheck } from "./processCheck.js";
 import { DISK_CHECK_TOOL_DEFINITION, runDiskCheck } from "./diskCheck.js";
 import { APPLY_PATCH_TOOL_DEFINITION, runApplyPatch } from "./applyPatch.js";
+import { MONITOR_TOOL_DEFINITION, runMonitor } from "./monitor.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -125,6 +126,13 @@ const applyPatchSchema = z.object({
   reason: z.string().optional(),
 });
 
+const monitorSchema = z.object({
+  command: z.string().min(1),
+  iterations: z.number().int().min(1).max(30).optional(),
+  interval_seconds: z.number().int().min(1).max(60).optional(),
+  reason: z.string().optional(),
+});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -154,6 +162,7 @@ const HANDLERS: Record<string, ToolHandler> = {
   process_check: { schema: processCheckSchema, run: (i) => runProcessCheck(i as z.infer<typeof processCheckSchema>) },
   disk_check: { schema: diskCheckSchema, run: (i) => runDiskCheck(i as z.infer<typeof diskCheckSchema>) },
   apply_patch: { schema: applyPatchSchema, run: (i) => runApplyPatch(i as z.infer<typeof applyPatchSchema>) },
+  monitor: { schema: monitorSchema, run: (i) => runMonitor(i as z.infer<typeof monitorSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -178,6 +187,7 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     PROCESS_CHECK_TOOL_DEFINITION,
     DISK_CHECK_TOOL_DEFINITION,
     APPLY_PATCH_TOOL_DEFINITION,
+    MONITOR_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);

@@ -284,6 +284,9 @@ Slash commands inside the REPL:
 Input directives:
   attach <path>           Attach an image (jpg/png/gif/webp) or text file
                           to the message; can appear anywhere in the input.
+  @path                   Same as attach, but inline (auto-attaches if file exists)
+  @<glob>                 e.g. @src/**/*.ts — auto-attach matching files
+  @<url>                  Fetch http(s) URL (text or image) and attach
 
 Environment:
   ANTHROPIC_API_KEY       Required.
