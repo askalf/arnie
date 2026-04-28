@@ -135,12 +135,18 @@ export async function runShellBackground(input: ShellBgInput): Promise<ShellBgRe
     job.stderrChunks.push(chunk);
     job.stderrBytes += chunk.length;
   });
-  child.on("close", (code, signal) => {
+  // `exit` fires the moment the process is gone; `close` only fires once
+  // stdio drains, which on Linux can be much later when a shell child has
+  // grandchildren (e.g. /bin/sh -c "sleep 30") that inherit the pipes.
+  // We want state="killed" to reflect promptly, so use `exit` here.
+  child.on("exit", (code, signal) => {
+    if (job.doneAt !== null) return;
     job.exitCode = code;
     job.signal = signal;
     job.doneAt = Date.now();
   });
   child.on("error", () => {
+    if (job.doneAt !== null) return;
     job.exitCode = -1;
     job.doneAt = Date.now();
   });
@@ -251,14 +257,14 @@ export async function runShellKill(input: ShellKillInput): Promise<ShellKillResu
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, job_id: job.id, killed: false, error: msg };
   }
-  // Wait briefly for the close event to fire so subsequent shell_status
+  // Wait briefly for the exit event to fire so subsequent shell_status
   // calls observe the job as "killed" rather than racing with the OS.
   // SIGKILL is unblockable so the child dies promptly; the 2s ceiling is
   // a safety net for severely overloaded runners.
   await new Promise<void>((resolve) => {
     if (job.doneAt !== null) return resolve();
     const timer = setTimeout(resolve, 2000);
-    job.child.once("close", () => {
+    job.child.once("exit", () => {
       clearTimeout(timer);
       resolve();
     });
