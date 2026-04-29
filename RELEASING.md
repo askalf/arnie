@@ -2,37 +2,44 @@
 
 How a release ships and what to verify post-publish.
 
-## How releases ship (today)
+## How releases ship
 
-Manual flow. The version bump is the release trigger — once on master, tag and publish follow immediately.
+Auto-release on master. The version bump in `package.json` is the release trigger — `.github/workflows/auto-release.yml` runs on every push to master that touches `package.json`, detects whether the `version` field actually changed, and (if so) tags `vX.Y.Z`, creates a GitHub release from the matching CHANGELOG section, and runs `npm publish --provenance --access public` against the registry. Idempotent — if the tag already exists or the version field didn't change, the workflow exits cleanly.
+
+The author's job is just to land the version bump:
 
 ```sh
-# 1. Update version in two places
+# 1. Update version in two places — these must match
 #    - package.json: "version": "X.Y.Z"
 #    - src/cli.ts:   const VERSION = "X.Y.Z"
-#    Both must match. CI's read_file: read package.json test asserts the
-#    package name; mismatched VERSION is caught by the build's --version
-#    smoke step in the post-publish checklist below.
+#    The auto-release workflow runs `arnie --version` post-build and
+#    refuses to publish if they disagree.
 
-# 2. Land the bump on master
+# 2. Update CHANGELOG.md — promote the `## [Unreleased]` heading
+#    to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh `## [Unreleased]`
+#    above it. The workflow extracts this section verbatim as the
+#    GitHub release notes.
+
+# 3. Land on master
 git commit -am "vX.Y.Z — <one-line summary>"
 git push
+```
 
-# 3. Wait for CI green (test + codeql)
-gh run list -R askalf/arnie -L 2
+That's it. The workflow handles tag, GitHub release, and npm publish.
 
-# 4. Tag annotated and push
-git tag -a vX.Y.Z -m "vX.Y.Z — <one-line summary>"
+If the workflow is unavailable (e.g., GitHub Actions is down) the manual fallback is:
+
+```sh
+git tag -a vX.Y.Z -m "vX.Y.Z"
 git push --tags
-
-# 5. Publish to npm
 TMPRC=$(mktemp); chmod 600 "$TMPRC"
 printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$TMPRC"
 npm publish --userconfig "$TMPRC"
 rm -f "$TMPRC"
+gh release create vX.Y.Z --notes-file <(awk '/^## \[X\.Y\.Z\]/{f=1;next} f&&/^## \[/{exit} f' CHANGELOG.md)
 ```
 
-The `--userconfig` route avoids leaving the auth token in `~/.npmrc`. The token gets read from the env var only at publish time and never persisted.
+The `--userconfig` route avoids leaving the auth token in `~/.npmrc`. Use only if the workflow is broken — under normal operation, all three (tag/release/publish) come for free from the version bump.
 
 ## Pre-merge checklist (PR author / reviewer)
 
@@ -77,4 +84,4 @@ If the bin shim fails or `--version` prints the wrong value, fast-follow with a 
 
 - **Dependabot security updates** are on. If a CVE in an `@anthropic-ai/sdk` / `chalk` / `zod` etc. lands, Dependabot opens a PR; merging it triggers the same flow above (bump versions, push, tag, publish).
 - **CodeQL** runs on every push and PR plus weekly. Open alerts (if any) in the Security tab; fix as patch releases.
-- **No auto-release workflow yet.** If you want one (version bump on master → tagged release + npm publish in CI), add a workflow that listens for `paths: [package.json]` on master and uses an `NPM_TOKEN` repo secret. Tradeoff: removes the manual `npm publish` step but requires a long-lived token in CI.
+- **`NPM_TOKEN`** is stored as a GitHub Actions secret on the arnie repo and used by the auto-release workflow only. To rotate: revoke at npmjs.com → Access Tokens, generate a new automation token, then `gh secret set NPM_TOKEN -R askalf/arnie -b '<new-token>'`. The published-package metadata includes a [provenance attestation](https://docs.npmjs.com/generating-provenance-statements) so consumers can verify it was built from this repo at the recorded commit.
