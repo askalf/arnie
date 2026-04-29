@@ -10,6 +10,12 @@ time, rename that heading to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-04-28
+
+`npm run test:integration` now picks the backend automatically — dario if it's reachable, direct API if `ANTHROPIC_API_KEY` is set, otherwise skip. Previously it required `--direct` to be passed explicitly to use the API mode, which was awkward in CI environments with a key configured but no dario running. Existing `--direct` and `--dario` flags still work and now mean "require this mode, don't auto-fall-back" so scripts that depend on a specific backend stay deterministic.
+
+This is also the first release shipped through the auto-release workflow added in 1.1.2 — version bump on master triggers tag, GitHub release, and `npm publish --provenance` automatically. From here on, releases are a single commit.
+
 ## [1.1.2] - 2026-04-28
 
 Metadata-only release. The first publish of `arnie-cli` to npm went out without `repository` / `homepage` / `bugs` / `license` / `author` / `keywords` fields, so the npm registry page had no GitHub link and search ranking was weak. Filled all of those in. No code changes; behavior identical to 1.1.1.

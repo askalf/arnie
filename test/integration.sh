@@ -1,24 +1,50 @@
 #!/usr/bin/env bash
 # Arnie integration suite — exercises the full arnie binary end-to-end
-# against a real backend. Defaults to dario at http://localhost:3456 to
-# avoid burning ANTHROPIC_API_KEY tokens; pass --direct to use the real
-# Anthropic API instead.
+# against a real backend.
 #
-# Skips cleanly (exit 0, marked SKIP) if no backend is reachable, so this
-# is safe to wire into CI without an unconditional dependency on dario or
-# an API key.
+# Mode selection:
+#   - default: prefer dario at http://localhost:3456 (no API tokens
+#     burned). If dario isn't reachable but ANTHROPIC_API_KEY is set,
+#     auto-fall-back to direct API calls. If neither, skip cleanly.
+#   - --direct: skip dario entirely, require ANTHROPIC_API_KEY.
+#   - --dario:  require dario; don't auto-fall-back.
+#
+# Skipping (exit 0, marked SKIP) is the right answer when no backend is
+# reachable — keeps CI/test:integration safe to wire in unconditionally.
 #
 # Usage:
-#   bash test/integration.sh             # via dario (default)
-#   bash test/integration.sh --direct    # via real ANTHROPIC_API_KEY
+#   bash test/integration.sh             # auto: dario → API → skip
+#   bash test/integration.sh --direct    # require ANTHROPIC_API_KEY
+#   bash test/integration.sh --dario     # require dario at :3456
 set -u
 
-MODE="dario"
-if [ "${1:-}" = "--direct" ]; then MODE="direct"; fi
+MODE="auto"
+case "${1:-}" in
+  --direct) MODE="direct" ;;
+  --dario)  MODE="dario" ;;
+  "")       MODE="auto" ;;
+  *)        echo "unknown arg: ${1}. Use --direct, --dario, or no arg for auto." >&2; exit 2 ;;
+esac
 
 # ---- backend availability gate ---------------------------------------
+dario_reachable() {
+  curl -s -o /dev/null -m 2 http://localhost:3456/ 2>/dev/null
+}
+
+if [ "$MODE" = "auto" ]; then
+  if dario_reachable; then
+    MODE="dario"
+  elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    MODE="direct"
+    echo "[INFO] dario not reachable; falling back to --direct (ANTHROPIC_API_KEY is set)"
+  else
+    echo "[SKIP] integration: no dario at http://localhost:3456 and ANTHROPIC_API_KEY is unset"
+    exit 0
+  fi
+fi
+
 if [ "$MODE" = "dario" ]; then
-  if ! curl -s -o /dev/null -m 2 http://localhost:3456/ 2>/dev/null; then
+  if ! dario_reachable; then
     echo "[SKIP] integration: no dario proxy at http://localhost:3456 (start one with: dario proxy &)"
     exit 0
   fi
