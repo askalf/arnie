@@ -16,10 +16,10 @@ export function setShellPermissions(config: PermissionsConfig): void {
 }
 
 const MAX_OUTPUT_BYTES = 50_000;
-const SPILLOVER_THRESHOLD_BYTES = 100_000;
+export const SPILLOVER_THRESHOLD_BYTES = 100_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-async function spillover(name: string, content: string): Promise<string> {
+export async function spillover(name: string, content: string): Promise<string> {
   // Each spillover call gets a fresh randomized subdirectory rather than a
   // shared `arnie-spillover/` with a Date.now()-based filename. Predictable
   // names invite symlink-race attacks on multi-user boxes; mkdtemp uses
@@ -80,14 +80,14 @@ export interface ShellResult {
   stderr_full_path?: string;
 }
 
-function looksDestructive(command: string): string | null {
+export function looksDestructive(command: string): string | null {
   for (const { pattern, reason } of DESTRUCTIVE_PATTERNS) {
     if (pattern.test(command)) return reason;
   }
   return null;
 }
 
-function truncateOutput(buf: Buffer): { text: string; truncated: boolean } {
+export function truncateOutput(buf: Buffer): { text: string; truncated: boolean } {
   if (buf.length <= MAX_OUTPUT_BYTES) {
     return { text: buf.toString("utf8"), truncated: false };
   }

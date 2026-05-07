@@ -11,6 +11,7 @@ Ready-made skills you can drop into your arnie install. Each subdirectory is a s
 | `systemd` | Linux units failing, restart loops, dependency cycles, timers |
 | `kubernetes-pod-triage` | Pods in CrashLoopBackOff, ImagePullBackOff, Pending, OOMKilled |
 | `smb-shares` | UNC paths failing, NTLM/Kerberos auth, SMB negotiation, share ACLs |
+| `ssh-remote-triage` | Troubleshooting a remote server over ssh — pairs with the `ssh_exec` / `scp_get` / `ssh_hosts` tools |
 
 ## Install
 

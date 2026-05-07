@@ -33,6 +33,14 @@ import { MONITOR_TOOL_DEFINITION, runMonitor } from "./monitor.js";
 import { EVENT_LOG_TOOL_DEFINITION, runEventLog } from "./eventLog.js";
 import { REGISTRY_READ_TOOL_DEFINITION, runRegistryRead } from "./registryRead.js";
 import { FIREWALL_CHECK_TOOL_DEFINITION, runFirewallCheck } from "./firewallCheck.js";
+import {
+  SSH_EXEC_TOOL_DEFINITION,
+  SCP_GET_TOOL_DEFINITION,
+  SSH_HOSTS_TOOL_DEFINITION,
+  runSshExec,
+  runScpGet,
+  runSshHosts,
+} from "./ssh.js";
 
 const shellSchema = z.object({
   command: z.string().min(1),
@@ -156,6 +164,21 @@ const firewallCheckSchema = z.object({
   enabled_only: z.boolean().optional(),
 });
 
+const sshExecSchema = z.object({
+  host: z.string().min(1),
+  command: z.string().min(1),
+  timeout_seconds: z.number().int().min(1).max(300).optional(),
+  reason: z.string().optional(),
+});
+
+const scpGetSchema = z.object({
+  host: z.string().min(1),
+  remote_path: z.string().min(1),
+  local_path: z.string().optional(),
+});
+
+const sshHostsSchema = z.object({});
+
 interface ToolHandler {
   schema: z.ZodTypeAny;
   run: (input: unknown, ctx: ToolContext) => Promise<unknown>;
@@ -189,6 +212,9 @@ const HANDLERS: Record<string, ToolHandler> = {
   event_log: { schema: eventLogSchema, run: (i) => runEventLog(i as z.infer<typeof eventLogSchema>) },
   registry_read: { schema: registryReadSchema, run: (i) => runRegistryRead(i as z.infer<typeof registryReadSchema>) },
   firewall_check: { schema: firewallCheckSchema, run: (i) => runFirewallCheck(i as z.infer<typeof firewallCheckSchema>) },
+  ssh_exec: { schema: sshExecSchema, run: (i) => runSshExec(i as z.infer<typeof sshExecSchema>) },
+  scp_get: { schema: scpGetSchema, run: (i) => runScpGet(i as z.infer<typeof scpGetSchema>) },
+  ssh_hosts: { schema: sshHostsSchema, run: (i) => runSshHosts(i as z.infer<typeof sshHostsSchema>) },
 };
 
 export interface ToolDispatchOptions {
@@ -217,6 +243,9 @@ export function buildToolList(opts: ToolDispatchOptions): Anthropic.ToolUnion[] 
     EVENT_LOG_TOOL_DEFINITION,
     REGISTRY_READ_TOOL_DEFINITION,
     FIREWALL_CHECK_TOOL_DEFINITION,
+    SSH_EXEC_TOOL_DEFINITION,
+    SCP_GET_TOOL_DEFINITION,
+    SSH_HOSTS_TOOL_DEFINITION,
   ];
   if (opts.subagent) {
     tools.push(SUBAGENT_TOOL_DEFINITION);
@@ -241,6 +270,7 @@ const PARALLEL_SAFE = new Set([
   "event_log",
   "registry_read",
   "firewall_check",
+  "ssh_hosts",
 ]);
 
 export function isParallelSafe(name: string): boolean {

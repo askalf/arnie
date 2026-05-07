@@ -10,11 +10,19 @@ time, rename that heading to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
 
 ## [Unreleased]
 
-Distribution polish + skill pack. No code changes — docs and content only.
+Distribution polish + skill pack + remote/ssh tools.
 
 `docs/EXAMPLES.md` adds five worked troubleshooting flows (printer spooler hung, "disk full but du disagrees", mis-routed TCP, AD trust break, CrashLoopBackOff with empty logs) so a new user can see what an arnie session actually looks like without running it.
 
-`skills/` ships a starter skill pack at the repo root: `active-directory`, `windows-update`, `systemd`, `kubernetes-pod-triage`, `smb-shares`. Each is a self-contained `SKILL.md` users can copy into `~/.arnie/skills/` to install. Addresses the "feature-rich but unknown" gap — arnie has had skill loading since 1.0.0 but nothing for users to actually load on day one. README points at both.
+`skills/` ships a starter skill pack at the repo root: `active-directory`, `windows-update`, `systemd`, `kubernetes-pod-triage`, `smb-shares`, `ssh-remote-triage`. Each is a self-contained `SKILL.md` users can copy into `~/.arnie/skills/` to install. Addresses the "feature-rich but unknown" gap — arnie has had skill loading since 1.0.0 but nothing for users to actually load on day one. README points at both.
+
+Three new tools — `ssh_exec`, `scp_get`, `ssh_hosts` — close the long-standing gap that arnie could only troubleshoot the local box. Real sysadmin work happens against servers the user *isn't sitting at*; now arnie can hit them directly.
+
+- `ssh_exec`: run a command on a remote via the system `ssh` binary (so `~/.ssh/config`, agent keys, ProxyJump, known_hosts all work). Uses `BatchMode=yes` + `ConnectTimeout=10` so it fails fast instead of hanging on auth prompts. Same destructive-pattern detector + confirmation as local `shell` — `ssh box rm -rf /` is just as bad. Same redactors. Same 100 KB spillover. Distinguishes ssh-itself failures (exit 255) from remote-command failures so the model doesn't waste time debugging a connection that never landed.
+- `scp_get`: pull a remote file to a local temp path, return the path. Pairs with `read_file` / `grep` for cheap re-reads without ssh round-trips. Sandbox write rules apply if `local_path` is specified.
+- `ssh_hosts`: list aliases from `~/.ssh/config` (and `/etc/ssh/ssh_config` on non-Windows). Read-only; lets the model discover hosts without asking. Wildcards and `Match` blocks are skipped; `Include` directives aren't followed.
+
+Both `ssh_exec` and `scp_get` are treated as mutating in `--dry-run`. `ssh_hosts` runs freely. Refactored `shell.ts` to export `looksDestructive`, `truncateOutput`, `spillover`, and `SPILLOVER_THRESHOLD_BYTES` so the ssh tool reuses the same destructive-detection and output-handling rather than drifting.
 
 ## [1.1.3] - 2026-04-28
 
