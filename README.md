@@ -55,6 +55,8 @@ you> the printer queue is jammed and i can't restart spooler
 arnie> [investigates with shell + Get-Service, finds stuck job, proposes the fix]
 ```
 
+See [docs/EXAMPLES.md](docs/EXAMPLES.md) for five worked troubleshooting flows — printer spooler hung, "disk full but du disagrees", AD trust break, mis-routed TCP, CrashLoopBackOff with empty logs.
+
 ### Multi-line input
 
 Triple-quote (`"""`) on its own line starts and ends a multi-line block. Use this for pasting logs or stack traces:
@@ -147,6 +149,16 @@ description: AD replication, group policy, FSMO roles. Use when the issue involv
 ```
 
 The skill name and description are loaded into the system prompt at startup; the body is loaded on demand when the model decides it's relevant (it calls `read_file` with the skill path). This keeps the base system prompt small while making specialized knowledge discoverable.
+
+Ready-made skills ship in [`skills/`](skills/) at the repo root — copy whichever ones you want into `~/.arnie/skills/` and they'll load on startup. Current pack:
+
+- `active-directory` — DC replication, GPO, Kerberos, secure-channel breaks
+- `windows-update` — stuck installs, `0x80...` error codes, WSUS misconfig
+- `systemd` — failed units, restart loops, dependency cycles, timers
+- `kubernetes-pod-triage` — CrashLoopBackOff, ImagePullBackOff, OOMKilled
+- `smb-shares` — UNC failures, NTLM/Kerberos, SMB negotiation
+
+See [skills/README.md](skills/README.md) for install + customization notes.
 
 ### Permissions config
 

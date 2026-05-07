@@ -10,6 +10,12 @@ time, rename that heading to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
 
 ## [Unreleased]
 
+Distribution polish + skill pack. No code changes — docs and content only.
+
+`docs/EXAMPLES.md` adds five worked troubleshooting flows (printer spooler hung, "disk full but du disagrees", mis-routed TCP, AD trust break, CrashLoopBackOff with empty logs) so a new user can see what an arnie session actually looks like without running it.
+
+`skills/` ships a starter skill pack at the repo root: `active-directory`, `windows-update`, `systemd`, `kubernetes-pod-triage`, `smb-shares`. Each is a self-contained `SKILL.md` users can copy into `~/.arnie/skills/` to install. Addresses the "feature-rich but unknown" gap — arnie has had skill loading since 1.0.0 but nothing for users to actually load on day one. README points at both.
+
 ## [1.1.3] - 2026-04-28
 
 `npm run test:integration` now picks the backend automatically — dario if it's reachable, direct API if `ANTHROPIC_API_KEY` is set, otherwise skip. Previously it required `--direct` to be passed explicitly to use the API mode, which was awkward in CI environments with a key configured but no dario running. Existing `--direct` and `--dario` flags still work and now mean "require this mode, don't auto-fall-back" so scripts that depend on a specific backend stay deterministic.
