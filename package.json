@@ -46,7 +46,7 @@
     "test:integration": "bash test/integration.sh"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.91.1",
+    "@anthropic-ai/sdk": "^0.95.1",
     "chalk": "^5.3.0",
     "zod": "^3.23.8"
   },
