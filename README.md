@@ -118,6 +118,9 @@ arnie> [reads the SMB error, investigates...]
 | `event_log` | Recent system events (Windows: `Get-WinEvent`; Linux: `journalctl`). Filter by level / source / time window. |
 | `registry_read` | Windows registry inspection. Path must start with `HKLM`/`HKCU`/`HKCR`/`HKU`/`HKCC`. Reads values + immediate subkeys (or recursive). |
 | `firewall_check` | Inspect host firewall state. Windows: `Get-NetFirewallProfile` + optional `Get-NetFirewallRule`. Linux: ufw → firewalld → iptables. macOS: `socketfilterfw`. Default returns just profile state; pass `rules=true` for the rule list (capped at 200). |
+| `ssh_exec` | Run a command on a remote host via the system `ssh` binary. Honors `~/.ssh/config` aliases, agent keys, ProxyJump. `BatchMode=yes` (no password prompts). Same destructive-pattern + confirmation as local `shell`. |
+| `scp_get` | Pull a remote file to a local temp path via `scp`, then return the local path so you can `read_file` / `grep` it without another round-trip. |
+| `ssh_hosts` | List ssh hosts configured in `~/.ssh/config` (and `/etc/ssh/ssh_config` on non-Windows). Read-only — the model uses this to discover what aliases are available. |
 | `subagent` | Spawn a focused Haiku-backed read-only investigation. Delegate enumeration / summarization to keep the main loop cheap. |
 | `web_search` | Server-side web search for KB articles, vendor docs, error string lookups. |
 
@@ -157,6 +160,7 @@ Ready-made skills ship in [`skills/`](skills/) at the repo root — copy whichev
 - `systemd` — failed units, restart loops, dependency cycles, timers
 - `kubernetes-pod-triage` — CrashLoopBackOff, ImagePullBackOff, OOMKilled
 - `smb-shares` — UNC failures, NTLM/Kerberos, SMB negotiation
+- `ssh-remote-triage` — investigating a server you're not sitting at; pairs with the ssh_exec / scp_get / ssh_hosts tools
 
 See [skills/README.md](skills/README.md) for install + customization notes.
 

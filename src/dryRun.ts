@@ -8,6 +8,8 @@ const MUTATING_TOOLS = new Set([
   "edit_file",
   "apply_patch",
   "monitor",
+  "ssh_exec",
+  "scp_get",
 ]);
 
 export function setDryRun(value: boolean): void {
@@ -26,6 +28,6 @@ export function dryRunRefusal(toolName: string, input: unknown): string {
   return JSON.stringify({
     ok: false,
     cancelled: true,
-    error: `dry-run mode: refused to run '${toolName}'. Investigation tools (read_file, list_dir, grep, network_check, service_check, tail_log, process_check, disk_check, shell_status, web_search, subagent) are still available. Tell the user what you would have done with: ${JSON.stringify(input).slice(0, 500)}`,
+    error: `dry-run mode: refused to run '${toolName}'. Investigation tools (read_file, list_dir, grep, network_check, service_check, tail_log, process_check, disk_check, shell_status, ssh_hosts, web_search, subagent) are still available. Tell the user what you would have done with: ${JSON.stringify(input).slice(0, 500)}`,
   });
 }
